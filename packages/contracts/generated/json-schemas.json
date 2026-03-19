@@ -27,6 +27,16 @@
         "SYSTEM_TRANSFORMED_ACTION"
       ]
     },
+    "ParserAssistanceStatus": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "string",
+      "enum": [
+        "DISABLED",
+        "PARSED",
+        "NO_MATCH",
+        "FAILED"
+      ]
+    },
     "ActionPacket": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "type": "object",
@@ -669,6 +679,229 @@
       ],
       "additionalProperties": false
     },
+    "ClarificationState": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "sceneFingerprint": {
+          "type": "string",
+          "minLength": 1
+        },
+        "ambiguityCount": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "lastTargetFingerprint": {
+          "default": null,
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "lastRouteCategory": {
+          "default": null,
+          "anyOf": [
+            {
+              "type": "string",
+              "enum": [
+                "NO_ROLL_DETERMINISTIC",
+                "ROLL_REQUIRED",
+                "CLARIFICATION_REQUIRED",
+                "SAFE_REJECT",
+                "UI_ACTION",
+                "SYSTEM_TRANSFORMED_ACTION"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "sceneFingerprint",
+        "ambiguityCount",
+        "lastTargetFingerprint",
+        "lastRouteCategory"
+      ],
+      "additionalProperties": false
+    },
+    "TurnIntake": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "sanitizedInputText": {
+          "type": "string",
+          "minLength": 1
+        },
+        "parserStatus": {
+          "type": "string",
+          "enum": [
+            "DISABLED",
+            "PARSED",
+            "NO_MATCH",
+            "FAILED"
+          ]
+        },
+        "advisoryActionPacket": {
+          "default": null,
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "actionType": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "targetEntityId": {
+                  "default": null,
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "method": {
+                  "default": null,
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "stance": {
+                  "default": null,
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "candidateSkills": {
+                  "default": [],
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "requiresRoll": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "actionType",
+                "targetEntityId",
+                "method",
+                "stance",
+                "candidateSkills",
+                "requiresRoll"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "sceneFingerprint": {
+          "type": "string",
+          "minLength": 1
+        },
+        "targetFingerprint": {
+          "default": null,
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "clarification": {
+          "default": null,
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "sceneFingerprint": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "ambiguityCount": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "lastTargetFingerprint": {
+                  "default": null,
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "lastRouteCategory": {
+                  "default": null,
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "enum": [
+                        "NO_ROLL_DETERMINISTIC",
+                        "ROLL_REQUIRED",
+                        "CLARIFICATION_REQUIRED",
+                        "SAFE_REJECT",
+                        "UI_ACTION",
+                        "SYSTEM_TRANSFORMED_ACTION"
+                      ]
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "sceneFingerprint",
+                "ambiguityCount",
+                "lastTargetFingerprint",
+                "lastRouteCategory"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "sanitizedInputText",
+        "parserStatus",
+        "advisoryActionPacket",
+        "sceneFingerprint",
+        "targetFingerprint",
+        "clarification"
+      ],
+      "additionalProperties": false
+    },
     "TurnRequest": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "type": "object",
@@ -760,6 +993,8 @@
           "type": "string",
           "enum": [
             "ACCEPTED",
+            "CLARIFICATION_REQUIRED",
+            "NO_OP",
             "REJECTED"
           ]
         },
@@ -782,6 +1017,176 @@
             "UI_ACTION",
             "SYSTEM_TRANSFORMED_ACTION"
           ]
+        },
+        "intake": {
+          "type": "object",
+          "properties": {
+            "sanitizedInputText": {
+              "type": "string",
+              "minLength": 1
+            },
+            "parserStatus": {
+              "type": "string",
+              "enum": [
+                "DISABLED",
+                "PARSED",
+                "NO_MATCH",
+                "FAILED"
+              ]
+            },
+            "advisoryActionPacket": {
+              "default": null,
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "actionType": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "targetEntityId": {
+                      "default": null,
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "method": {
+                      "default": null,
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "stance": {
+                      "default": null,
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "candidateSkills": {
+                      "default": [],
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "requiresRoll": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "actionType",
+                    "targetEntityId",
+                    "method",
+                    "stance",
+                    "candidateSkills",
+                    "requiresRoll"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "sceneFingerprint": {
+              "type": "string",
+              "minLength": 1
+            },
+            "targetFingerprint": {
+              "default": null,
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "clarification": {
+              "default": null,
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "sceneFingerprint": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "ambiguityCount": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "lastTargetFingerprint": {
+                      "default": null,
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "lastRouteCategory": {
+                      "default": null,
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "enum": [
+                            "NO_ROLL_DETERMINISTIC",
+                            "ROLL_REQUIRED",
+                            "CLARIFICATION_REQUIRED",
+                            "SAFE_REJECT",
+                            "UI_ACTION",
+                            "SYSTEM_TRANSFORMED_ACTION"
+                          ]
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "sceneFingerprint",
+                    "ambiguityCount",
+                    "lastTargetFingerprint",
+                    "lastRouteCategory"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "sanitizedInputText",
+            "parserStatus",
+            "advisoryActionPacket",
+            "sceneFingerprint",
+            "targetFingerprint",
+            "clarification"
+          ],
+          "additionalProperties": false
         },
         "revisionId": {
           "default": null,
@@ -1037,6 +1442,7 @@
         "status",
         "decision",
         "routeCategory",
+        "intake",
         "revisionId",
         "simulationResult",
         "events",
@@ -1044,6 +1450,34 @@
         "workerJobs",
         "playerMessage",
         "rulesetVersion"
+      ],
+      "additionalProperties": false
+    },
+    "ErrorResponse": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "code": {
+          "type": "string",
+          "minLength": 1
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1
+        },
+        "details": {
+          "default": {},
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {}
+        }
+      },
+      "required": [
+        "code",
+        "message",
+        "details"
       ],
       "additionalProperties": false
     }

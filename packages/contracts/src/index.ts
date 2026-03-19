@@ -49,7 +49,16 @@ export const AutosaveStatusSchema = z.enum([
 
 export const TurnStatusSchema = z.enum([
   "ACCEPTED",
+  "CLARIFICATION_REQUIRED",
+  "NO_OP",
   "REJECTED"
+]);
+
+export const ParserAssistanceStatusSchema = z.enum([
+  "DISABLED",
+  "PARSED",
+  "NO_MATCH",
+  "FAILED"
 ]);
 
 const MetadataSchema = z.record(z.string(), z.unknown());
@@ -107,6 +116,22 @@ export const WorkerReferenceSchema = z.object({
   jobId: z.string().min(1),
   uniquenessKey: z.string().min(1),
   status: WorkerJobStatusSchema
+});
+
+export const ClarificationStateSchema = z.object({
+  sceneFingerprint: z.string().min(1),
+  ambiguityCount: z.number().int().min(0),
+  lastTargetFingerprint: z.string().nullable().default(null),
+  lastRouteCategory: RouteCategorySchema.nullable().default(null)
+});
+
+export const TurnIntakeSchema = z.object({
+  sanitizedInputText: z.string().min(1),
+  parserStatus: ParserAssistanceStatusSchema,
+  advisoryActionPacket: ActionPacketSchema.nullable().default(null),
+  sceneFingerprint: z.string().min(1),
+  targetFingerprint: z.string().nullable().default(null),
+  clarification: ClarificationStateSchema.nullable().default(null)
 });
 
 export const SummaryJobSchema = z.object({
@@ -167,6 +192,7 @@ export const TurnAuthoritativeResponseSchema = z.object({
   status: TurnStatusSchema,
   decision: SafetyDecisionSchema,
   routeCategory: RouteCategorySchema,
+  intake: TurnIntakeSchema,
   revisionId: z.string().nullable().default(null),
   simulationResult: SimulationResultSchema.nullable(),
   events: z.array(CanonicalEventSchema).default([]),
@@ -176,9 +202,16 @@ export const TurnAuthoritativeResponseSchema = z.object({
   rulesetVersion: RulesetVersionSchema
 });
 
+export const ErrorResponseSchema = z.object({
+  code: z.string().min(1),
+  message: z.string().min(1),
+  details: MetadataSchema.default({})
+});
+
 export const ContractSchemas = {
   SafetyDecision: SafetyDecisionSchema,
   RouteCategory: RouteCategorySchema,
+  ParserAssistanceStatus: ParserAssistanceStatusSchema,
   ActionPacket: ActionPacketSchema,
   SimulationResult: SimulationResultSchema,
   CanonicalEvent: CanonicalEventSchema,
@@ -187,8 +220,11 @@ export const ContractSchemas = {
   SummaryJob: SummaryJobSchema,
   ImageJob: ImageJobSchema,
   NarrationJob: NarrationJobSchema,
+  ClarificationState: ClarificationStateSchema,
+  TurnIntake: TurnIntakeSchema,
   TurnRequest: TurnRequestSchema,
-  TurnAuthoritativeResponse: TurnAuthoritativeResponseSchema
+  TurnAuthoritativeResponse: TurnAuthoritativeResponseSchema,
+  ErrorResponse: ErrorResponseSchema
 } as const;
 
 export type SafetyDecision = z.infer<typeof SafetyDecisionSchema>;
@@ -201,6 +237,9 @@ export type SaveSnapshot = z.infer<typeof SaveSnapshotSchema>;
 export type SummaryJob = z.infer<typeof SummaryJobSchema>;
 export type ImageJob = z.infer<typeof ImageJobSchema>;
 export type NarrationJob = z.infer<typeof NarrationJobSchema>;
+export type ParserAssistanceStatus = z.infer<typeof ParserAssistanceStatusSchema>;
+export type ClarificationState = z.infer<typeof ClarificationStateSchema>;
+export type TurnIntake = z.infer<typeof TurnIntakeSchema>;
 export type TurnRequest = z.infer<typeof TurnRequestSchema>;
 export type TurnAuthoritativeResponse = z.infer<typeof TurnAuthoritativeResponseSchema>;
-
+export type ErrorResponse = z.infer<typeof ErrorResponseSchema>;

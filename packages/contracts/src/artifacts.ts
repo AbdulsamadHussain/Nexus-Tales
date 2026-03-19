@@ -55,11 +55,31 @@ export function buildArtifacts() {
           },
           responses: {
             "200": {
-              description: "Authoritative turn response",
+              description: "Turn intake response",
               content: {
                 "application/json": {
                   schema: {
                     $ref: "#/components/schemas/TurnAuthoritativeResponse"
+                  }
+                }
+              }
+            },
+            "400": {
+              description: "Invalid request payload",
+              content: {
+                "application/json": {
+                  schema: {
+                    $ref: "#/components/schemas/ErrorResponse"
+                  }
+                }
+              }
+            },
+            "409": {
+              description: "Idempotency conflict",
+              content: {
+                "application/json": {
+                  schema: {
+                    $ref: "#/components/schemas/ErrorResponse"
                   }
                 }
               }
@@ -78,4 +98,3 @@ export function buildArtifacts() {
     openApiDocument
   };
 }
-

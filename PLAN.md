@@ -32,9 +32,9 @@ Build this as a contract-first modular monolith with one schema authority, one c
 
 ### Phase 2: Deterministic Simulation and Authoritative Turn Commit
 - Implement the simulation service as the sole authority for legality checks, roll math, success tiers, resource validation, consequence application, canonical event creation, and revision assembly.
-- Execute accepted turns under the advisory lock and inside one database transaction that commits accepted turn metadata, simulation result, event rows, revision row, snapshot metadata, autosave marker, and outbox rows together.
+- Execute accepted turns under the advisory lock and inside one database transaction that commits accepted turn metadata, simulation result, event rows, revision row, snapshot metadata, autosave marker, and outbox rows together. No worker, reader, or analytics consumer may observe any part of the turn before the full transaction including outbox rows is durable.
 - Keep authoritative response and narration separate: truth returns first with revision/result/events/autosave/job references; prose and images arrive later via stream or follow-up fetch.
-- Exit gate: fixed prior state, fixed input, fixed seed, and fixed ruleset version always produce the same simulation result and same committed revision; duplicate submissions return the original result instead of creating a new revision.
+- Exit gate: fixed prior state, fixed input, fixed seed, fixed ruleset version, and fixed schema version always produce the same simulation result and same committed revision; duplicate submissions return the original result instead of creating a new revision.
 - Failure counter: if rules scope expands too quickly, cut v1 to one curated campaign and a smaller ruleset. Do not weaken determinism, transactionality, or idempotency.
 
 ### Phase 3: Revisions, Saves, Rollback, and Migration

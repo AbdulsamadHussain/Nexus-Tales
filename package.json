@@ -9,6 +9,7 @@
   "scripts": {
     "build": "npm run build --workspace @nexus-tales/contracts && npm run build --workspace @nexus-tales/backend",
     "dev:backend": "npm run dev --workspace @nexus-tales/backend",
+    "db:migrate:supabase": "node ./scripts/apply-db-migration.mjs",
     "generate:contracts": "npm run generate --workspace @nexus-tales/contracts",
     "check:contract-authority": "node ./scripts/check-contract-authority.mjs",
     "check:generated-contracts": "npm run check:artifacts --workspace @nexus-tales/contracts",

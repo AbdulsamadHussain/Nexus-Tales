@@ -1,12 +1,23 @@
 import type { FastifyInstance } from "fastify";
 
 import {
-  RULESET_VERSION,
-  TurnAuthoritativeResponseSchema,
+  ErrorResponseSchema,
   TurnRequestSchema
 } from "@nexus-tales/contracts";
 
-export async function registerTurnRoutes(app: FastifyInstance) {
+import {
+  IdempotencyConflictError,
+  type TurnIntakeService
+} from "../turns/service.js";
+
+type RegisterTurnRoutesOptions = {
+  turnIntakeService: TurnIntakeService;
+};
+
+export async function registerTurnRoutes(
+  app: FastifyInstance,
+  options: RegisterTurnRoutesOptions
+) {
   app.post("/v1/turns", async (request, reply) => {
     const parsed = TurnRequestSchema.safeParse(request.body);
 
@@ -19,84 +30,71 @@ export async function registerTurnRoutes(app: FastifyInstance) {
         "Rejected invalid turn request."
       );
 
-      return reply.status(400).send({
+      const errorResponse = ErrorResponseSchema.parse({
+        code: "INVALID_TURN_REQUEST",
         message: "Invalid turn request payload.",
-        issues: parsed.error.issues
+        details: {
+          issues: parsed.error.issues
+        }
       });
+
+      return reply.status(400).send(errorResponse);
     }
 
-    const now = new Date().toISOString();
-    const { clientTurnId, inputText, playerId, runId, saveSlotId } = parsed.data;
+    try {
+      const response = await options.turnIntakeService.handleTurn(parsed.data);
 
-    const mockResponse = TurnAuthoritativeResponseSchema.parse({
-      status: "ACCEPTED",
-      decision: "ALLOW",
-      routeCategory: "NO_ROLL_DETERMINISTIC",
-      revisionId: `rev_mock_${clientTurnId}`,
-      simulationResult: {
-        rulesetVersion: RULESET_VERSION,
-        successTier: "FULL_SUCCESS",
-        roll: null,
-        stateDelta: {
-          mocked: true,
-          echoedInput: inputText
+      request.log.info(
+        {
+          eventName: "turns.phase1.intake_resolved",
+          status: response.status,
+          decision: response.decision,
+          routeCategory: response.routeCategory,
+          playerId: parsed.data.playerId,
+          runId: parsed.data.runId,
+          saveSlotId: parsed.data.saveSlotId,
+          clientTurnId: parsed.data.clientTurnId
         },
-        events: [
+        "Resolved turn intake."
+      );
+
+      return reply.status(200).send(response);
+    } catch (error) {
+      if (error instanceof IdempotencyConflictError) {
+        request.log.warn(
           {
-            eventType: "TURN_ACCEPTED",
-            entityId: playerId,
-            occurredAt: now,
-            metadata: {
-              runId,
-              saveSlotId
-            }
+            eventName: "turns.idempotency_conflict",
+            playerId: parsed.data.playerId,
+            runId: parsed.data.runId,
+            saveSlotId: parsed.data.saveSlotId,
+            clientTurnId: parsed.data.clientTurnId
+          },
+          error.message
+        );
+
+        const errorResponse = ErrorResponseSchema.parse({
+          code: "TURN_IDEMPOTENCY_CONFLICT",
+          message: error.message,
+          details: {
+            playerId: parsed.data.playerId,
+            runId: parsed.data.runId,
+            saveSlotId: parsed.data.saveSlotId,
+            clientTurnId: parsed.data.clientTurnId
           }
-        ],
-        summaryFlags: []
-      },
-      events: [
+        });
+
+        return reply.status(409).send(errorResponse);
+      }
+
+      request.log.error(
         {
-          eventType: "TURN_ACCEPTED",
-          entityId: playerId,
-          occurredAt: now,
-          metadata: {
-            runId,
-            saveSlotId
-          }
-        }
-      ],
-      autosaveStatus: "ELIGIBLE",
-      workerJobs: [
-        {
-          jobType: "NARRATION",
-          jobId: `job_narration_${clientTurnId}`,
-          uniquenessKey: `narration:rev_mock_${clientTurnId}`,
-          status: "QUEUED"
+          eventName: "turns.intake_unhandled_error",
+          error
         },
-        {
-          jobType: "SUMMARY",
-          jobId: `job_summary_${clientTurnId}`,
-          uniquenessKey: `summary:rev_mock_${clientTurnId}`,
-          status: "QUEUED"
-        }
-      ],
-      playerMessage: "Phase 0 mock authoritative response.",
-      rulesetVersion: RULESET_VERSION
-    });
+        "Unhandled turn intake error."
+      );
 
-    request.log.info(
-      {
-        eventName: "phase0.turn_mock_accepted",
-        routeCategory: mockResponse.routeCategory,
-        revisionId: mockResponse.revisionId,
-        playerId,
-        runId,
-        saveSlotId
-      },
-      "Returned mocked authoritative turn response."
-    );
-
-    return reply.status(200).send(mockResponse);
+      throw error;
+    }
   });
 }
-

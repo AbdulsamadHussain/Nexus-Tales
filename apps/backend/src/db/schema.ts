@@ -135,10 +135,11 @@ export const clarificationState = pgTable(
     id: text("id").primaryKey(),
     runId: text("run_id").notNull().references(() => runs.id),
     saveSlotId: text("save_slot_id").notNull().references(() => saveSlots.id),
-    sessionId: text("session_id").notNull(),
     sceneFingerprint: text("scene_fingerprint").notNull(),
     lastTargetFingerprint: text("last_target_fingerprint"),
     lastRouteCategory: text("last_route_category"),
+    lastInputFingerprint: text("last_input_fingerprint"),
+    lastSessionId: text("last_session_id").notNull(),
     ambiguityCount: integer("ambiguity_count").default(0).notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull()
   },
@@ -146,7 +147,7 @@ export const clarificationState = pgTable(
     activeScopeIdx: uniqueIndex("clarification_state_scope_idx").on(
       table.runId,
       table.saveSlotId,
-      table.sessionId
+      table.sceneFingerprint
     )
   })
 );
@@ -168,4 +169,3 @@ export const advisoryLockAudit = pgTable("advisory_lock_audit", {
   lockKey: bigint("lock_key", { mode: "bigint" }).notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull()
 });
-
