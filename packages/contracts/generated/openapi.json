@@ -1,0 +1,1093 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Nexus Tales API",
+    "version": "0.1.0",
+    "description": "Generated from the shared contracts package."
+  },
+  "paths": {
+    "/v1/health": {
+      "get": {
+        "summary": "Health check",
+        "responses": {
+          "200": {
+            "description": "Healthy"
+          }
+        }
+      }
+    },
+    "/v1/turns": {
+      "post": {
+        "summary": "Submit a player turn",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TurnRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Authoritative turn response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TurnAuthoritativeResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "SafetyDecision": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "string",
+        "enum": [
+          "ALLOW",
+          "ALLOW_WITH_CONSTRAINTS",
+          "TRANSFORM",
+          "REJECT"
+        ]
+      },
+      "RouteCategory": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "string",
+        "enum": [
+          "NO_ROLL_DETERMINISTIC",
+          "ROLL_REQUIRED",
+          "CLARIFICATION_REQUIRED",
+          "SAFE_REJECT",
+          "UI_ACTION",
+          "SYSTEM_TRANSFORMED_ACTION"
+        ]
+      },
+      "ActionPacket": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "actionType": {
+            "type": "string",
+            "minLength": 1
+          },
+          "targetEntityId": {
+            "default": null,
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "method": {
+            "default": null,
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "stance": {
+            "default": null,
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "candidateSkills": {
+            "default": [],
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "requiresRoll": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "actionType",
+          "targetEntityId",
+          "method",
+          "stance",
+          "candidateSkills",
+          "requiresRoll"
+        ],
+        "additionalProperties": false
+      },
+      "SimulationResult": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "rulesetVersion": {
+            "type": "string",
+            "const": "phase0-ruleset-v1"
+          },
+          "successTier": {
+            "type": "string",
+            "enum": [
+              "CRITICAL_FAILURE",
+              "FAILURE",
+              "PARTIAL_SUCCESS",
+              "FULL_SUCCESS",
+              "CRITICAL_SUCCESS"
+            ]
+          },
+          "roll": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "die": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 20
+                  },
+                  "modifier": {
+                    "type": "integer",
+                    "minimum": -9007199254740991,
+                    "maximum": 9007199254740991
+                  },
+                  "total": {
+                    "type": "integer",
+                    "minimum": -9007199254740991,
+                    "maximum": 9007199254740991
+                  },
+                  "target": {
+                    "type": "integer",
+                    "minimum": -9007199254740991,
+                    "maximum": 9007199254740991
+                  }
+                },
+                "required": [
+                  "die",
+                  "modifier",
+                  "total",
+                  "target"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "stateDelta": {
+            "default": {},
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {}
+          },
+          "events": {
+            "default": [],
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "eventType": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "entityId": {
+                  "default": null,
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "occurredAt": {
+                  "type": "string",
+                  "format": "date-time",
+                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+                },
+                "metadata": {
+                  "default": {},
+                  "type": "object",
+                  "propertyNames": {
+                    "type": "string"
+                  },
+                  "additionalProperties": {}
+                }
+              },
+              "required": [
+                "eventType",
+                "entityId",
+                "occurredAt",
+                "metadata"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "summaryFlags": {
+            "default": [],
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "rulesetVersion",
+          "successTier",
+          "roll",
+          "stateDelta",
+          "events",
+          "summaryFlags"
+        ],
+        "additionalProperties": false
+      },
+      "CanonicalEvent": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "eventType": {
+            "type": "string",
+            "minLength": 1
+          },
+          "entityId": {
+            "default": null,
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "occurredAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+          },
+          "metadata": {
+            "default": {},
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {}
+          }
+        },
+        "required": [
+          "eventType",
+          "entityId",
+          "occurredAt",
+          "metadata"
+        ],
+        "additionalProperties": false
+      },
+      "RevisionRecord": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "revisionId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "previousRevisionId": {
+            "default": null,
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "rulesetVersion": {
+            "type": "string",
+            "const": "phase0-ruleset-v1"
+          },
+          "schemaVersion": {
+            "type": "number",
+            "const": 1
+          },
+          "savedAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+          },
+          "playerId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "runId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "saveSlotId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "actionPacket": {
+            "type": "object",
+            "properties": {
+              "actionType": {
+                "type": "string",
+                "minLength": 1
+              },
+              "targetEntityId": {
+                "default": null,
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "method": {
+                "default": null,
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "stance": {
+                "default": null,
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "candidateSkills": {
+                "default": [],
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "requiresRoll": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "actionType",
+              "targetEntityId",
+              "method",
+              "stance",
+              "candidateSkills",
+              "requiresRoll"
+            ],
+            "additionalProperties": false
+          },
+          "simulationResult": {
+            "type": "object",
+            "properties": {
+              "rulesetVersion": {
+                "type": "string",
+                "const": "phase0-ruleset-v1"
+              },
+              "successTier": {
+                "type": "string",
+                "enum": [
+                  "CRITICAL_FAILURE",
+                  "FAILURE",
+                  "PARTIAL_SUCCESS",
+                  "FULL_SUCCESS",
+                  "CRITICAL_SUCCESS"
+                ]
+              },
+              "roll": {
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "die": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 20
+                      },
+                      "modifier": {
+                        "type": "integer",
+                        "minimum": -9007199254740991,
+                        "maximum": 9007199254740991
+                      },
+                      "total": {
+                        "type": "integer",
+                        "minimum": -9007199254740991,
+                        "maximum": 9007199254740991
+                      },
+                      "target": {
+                        "type": "integer",
+                        "minimum": -9007199254740991,
+                        "maximum": 9007199254740991
+                      }
+                    },
+                    "required": [
+                      "die",
+                      "modifier",
+                      "total",
+                      "target"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "stateDelta": {
+                "default": {},
+                "type": "object",
+                "propertyNames": {
+                  "type": "string"
+                },
+                "additionalProperties": {}
+              },
+              "events": {
+                "default": [],
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "eventType": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "entityId": {
+                      "default": null,
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "occurredAt": {
+                      "type": "string",
+                      "format": "date-time",
+                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+                    },
+                    "metadata": {
+                      "default": {},
+                      "type": "object",
+                      "propertyNames": {
+                        "type": "string"
+                      },
+                      "additionalProperties": {}
+                    }
+                  },
+                  "required": [
+                    "eventType",
+                    "entityId",
+                    "occurredAt",
+                    "metadata"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "summaryFlags": {
+                "default": [],
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": [
+              "rulesetVersion",
+              "successTier",
+              "roll",
+              "stateDelta",
+              "events",
+              "summaryFlags"
+            ],
+            "additionalProperties": false
+          },
+          "canonicalStatePointer": {
+            "type": "string",
+            "minLength": 1
+          },
+          "autosaveEligible": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "revisionId",
+          "previousRevisionId",
+          "rulesetVersion",
+          "schemaVersion",
+          "savedAt",
+          "playerId",
+          "runId",
+          "saveSlotId",
+          "actionPacket",
+          "simulationResult",
+          "canonicalStatePointer",
+          "autosaveEligible"
+        ],
+        "additionalProperties": false
+      },
+      "SaveSnapshot": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "saveId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "revisionId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "schemaVersion": {
+            "type": "number",
+            "const": 1
+          },
+          "snapshotPointer": {
+            "type": "string",
+            "minLength": 1
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+          }
+        },
+        "required": [
+          "saveId",
+          "revisionId",
+          "schemaVersion",
+          "snapshotPointer",
+          "createdAt"
+        ],
+        "additionalProperties": false
+      },
+      "SummaryJob": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "revisionId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "campaignId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "saveSlotId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "schemaVersion": {
+            "type": "number",
+            "const": 1
+          },
+          "jobType": {
+            "type": "string",
+            "const": "SUMMARY"
+          },
+          "uniquenessKey": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "revisionId",
+          "campaignId",
+          "saveSlotId",
+          "schemaVersion",
+          "jobType",
+          "uniquenessKey"
+        ],
+        "additionalProperties": false
+      },
+      "ImageJob": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "revisionId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "campaignId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "saveSlotId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "schemaVersion": {
+            "type": "number",
+            "const": 1
+          },
+          "jobType": {
+            "type": "string",
+            "const": "IMAGE"
+          },
+          "sceneAnchorId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniquenessKey": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "revisionId",
+          "campaignId",
+          "saveSlotId",
+          "schemaVersion",
+          "jobType",
+          "sceneAnchorId",
+          "uniquenessKey"
+        ],
+        "additionalProperties": false
+      },
+      "NarrationJob": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "revisionId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "campaignId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "saveSlotId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "schemaVersion": {
+            "type": "number",
+            "const": 1
+          },
+          "jobType": {
+            "type": "string",
+            "const": "NARRATION"
+          },
+          "uniquenessKey": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "revisionId",
+          "campaignId",
+          "saveSlotId",
+          "schemaVersion",
+          "jobType",
+          "uniquenessKey"
+        ],
+        "additionalProperties": false
+      },
+      "TurnRequest": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "playerId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "runId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "saveSlotId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "clientTurnId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "inputText": {
+            "type": "string",
+            "minLength": 1
+          },
+          "sceneId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "contentSettings": {
+            "type": "object",
+            "properties": {
+              "violenceLevel": {
+                "default": "MEDIUM",
+                "type": "string",
+                "enum": [
+                  "LOW",
+                  "MEDIUM",
+                  "HIGH"
+                ]
+              },
+              "romanceEnabled": {
+                "default": false,
+                "type": "boolean"
+              },
+              "horrorEnabled": {
+                "default": false,
+                "type": "boolean"
+              },
+              "matureThemesEnabled": {
+                "default": false,
+                "type": "boolean"
+              },
+              "betrayalEnabled": {
+                "default": false,
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "violenceLevel",
+              "romanceEnabled",
+              "horrorEnabled",
+              "matureThemesEnabled",
+              "betrayalEnabled"
+            ],
+            "additionalProperties": false
+          },
+          "sessionId": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "playerId",
+          "runId",
+          "saveSlotId",
+          "clientTurnId",
+          "inputText",
+          "sceneId",
+          "contentSettings",
+          "sessionId"
+        ],
+        "additionalProperties": false
+      },
+      "TurnAuthoritativeResponse": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "ACCEPTED",
+              "REJECTED"
+            ]
+          },
+          "decision": {
+            "type": "string",
+            "enum": [
+              "ALLOW",
+              "ALLOW_WITH_CONSTRAINTS",
+              "TRANSFORM",
+              "REJECT"
+            ]
+          },
+          "routeCategory": {
+            "type": "string",
+            "enum": [
+              "NO_ROLL_DETERMINISTIC",
+              "ROLL_REQUIRED",
+              "CLARIFICATION_REQUIRED",
+              "SAFE_REJECT",
+              "UI_ACTION",
+              "SYSTEM_TRANSFORMED_ACTION"
+            ]
+          },
+          "revisionId": {
+            "default": null,
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "simulationResult": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "rulesetVersion": {
+                    "type": "string",
+                    "const": "phase0-ruleset-v1"
+                  },
+                  "successTier": {
+                    "type": "string",
+                    "enum": [
+                      "CRITICAL_FAILURE",
+                      "FAILURE",
+                      "PARTIAL_SUCCESS",
+                      "FULL_SUCCESS",
+                      "CRITICAL_SUCCESS"
+                    ]
+                  },
+                  "roll": {
+                    "anyOf": [
+                      {
+                        "type": "object",
+                        "properties": {
+                          "die": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 20
+                          },
+                          "modifier": {
+                            "type": "integer",
+                            "minimum": -9007199254740991,
+                            "maximum": 9007199254740991
+                          },
+                          "total": {
+                            "type": "integer",
+                            "minimum": -9007199254740991,
+                            "maximum": 9007199254740991
+                          },
+                          "target": {
+                            "type": "integer",
+                            "minimum": -9007199254740991,
+                            "maximum": 9007199254740991
+                          }
+                        },
+                        "required": [
+                          "die",
+                          "modifier",
+                          "total",
+                          "target"
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "stateDelta": {
+                    "default": {},
+                    "type": "object",
+                    "propertyNames": {
+                      "type": "string"
+                    },
+                    "additionalProperties": {}
+                  },
+                  "events": {
+                    "default": [],
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "eventType": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "entityId": {
+                          "default": null,
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "occurredAt": {
+                          "type": "string",
+                          "format": "date-time",
+                          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+                        },
+                        "metadata": {
+                          "default": {},
+                          "type": "object",
+                          "propertyNames": {
+                            "type": "string"
+                          },
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "eventType",
+                        "entityId",
+                        "occurredAt",
+                        "metadata"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "summaryFlags": {
+                    "default": [],
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "required": [
+                  "rulesetVersion",
+                  "successTier",
+                  "roll",
+                  "stateDelta",
+                  "events",
+                  "summaryFlags"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "events": {
+            "default": [],
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "eventType": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "entityId": {
+                  "default": null,
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "occurredAt": {
+                  "type": "string",
+                  "format": "date-time",
+                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+                },
+                "metadata": {
+                  "default": {},
+                  "type": "object",
+                  "propertyNames": {
+                    "type": "string"
+                  },
+                  "additionalProperties": {}
+                }
+              },
+              "required": [
+                "eventType",
+                "entityId",
+                "occurredAt",
+                "metadata"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "autosaveStatus": {
+            "type": "string",
+            "enum": [
+              "ELIGIBLE",
+              "INELIGIBLE"
+            ]
+          },
+          "workerJobs": {
+            "default": [],
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "jobType": {
+                  "type": "string",
+                  "enum": [
+                    "SUMMARY",
+                    "NARRATION",
+                    "IMAGE"
+                  ]
+                },
+                "jobId": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "uniquenessKey": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "status": {
+                  "type": "string",
+                  "enum": [
+                    "QUEUED",
+                    "SKIPPED"
+                  ]
+                }
+              },
+              "required": [
+                "jobType",
+                "jobId",
+                "uniquenessKey",
+                "status"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "playerMessage": {
+            "default": null,
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "rulesetVersion": {
+            "type": "string",
+            "const": "phase0-ruleset-v1"
+          }
+        },
+        "required": [
+          "status",
+          "decision",
+          "routeCategory",
+          "revisionId",
+          "simulationResult",
+          "events",
+          "autosaveStatus",
+          "workerJobs",
+          "playerMessage",
+          "rulesetVersion"
+        ],
+        "additionalProperties": false
+      }
+    }
+  }
+}

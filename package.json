@@ -1,0 +1,23 @@
+{
+  "name": "nexus-tales",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "npm run build --workspace @nexus-tales/contracts && npm run build --workspace @nexus-tales/backend",
+    "dev:backend": "npm run dev --workspace @nexus-tales/backend",
+    "generate:contracts": "npm run generate --workspace @nexus-tales/contracts",
+    "check:contract-authority": "node ./scripts/check-contract-authority.mjs",
+    "check:generated-contracts": "npm run check:artifacts --workspace @nexus-tales/contracts",
+    "test": "npm run test --workspace @nexus-tales/backend",
+    "verify:phase0": "npm run build && npm run test && npm run check:contract-authority && npm run check:generated-contracts"
+  },
+  "devDependencies": {
+    "@types/node": "^24.5.2",
+    "tsx": "^4.20.5",
+    "typescript": "^5.9.2"
+  }
+}

@@ -1,0 +1,206 @@
+import { z } from "zod";
+
+export const CONTRACTS_VERSION = "0.1.0";
+export const RULESET_VERSION = "phase0-ruleset-v1";
+export const PERSISTENCE_SCHEMA_VERSION = 1;
+
+export const RulesetVersionSchema = z.literal(RULESET_VERSION);
+export const PersistenceSchemaVersionSchema = z.literal(PERSISTENCE_SCHEMA_VERSION);
+
+export const SafetyDecisionSchema = z.enum([
+  "ALLOW",
+  "ALLOW_WITH_CONSTRAINTS",
+  "TRANSFORM",
+  "REJECT"
+]);
+
+export const RouteCategorySchema = z.enum([
+  "NO_ROLL_DETERMINISTIC",
+  "ROLL_REQUIRED",
+  "CLARIFICATION_REQUIRED",
+  "SAFE_REJECT",
+  "UI_ACTION",
+  "SYSTEM_TRANSFORMED_ACTION"
+]);
+
+export const SuccessTierSchema = z.enum([
+  "CRITICAL_FAILURE",
+  "FAILURE",
+  "PARTIAL_SUCCESS",
+  "FULL_SUCCESS",
+  "CRITICAL_SUCCESS"
+]);
+
+export const WorkerJobTypeSchema = z.enum([
+  "SUMMARY",
+  "NARRATION",
+  "IMAGE"
+]);
+
+export const WorkerJobStatusSchema = z.enum([
+  "QUEUED",
+  "SKIPPED"
+]);
+
+export const AutosaveStatusSchema = z.enum([
+  "ELIGIBLE",
+  "INELIGIBLE"
+]);
+
+export const TurnStatusSchema = z.enum([
+  "ACCEPTED",
+  "REJECTED"
+]);
+
+const MetadataSchema = z.record(z.string(), z.unknown());
+
+export const ContentSettingsSchema = z.object({
+  violenceLevel: z.enum(["LOW", "MEDIUM", "HIGH"]).default("MEDIUM"),
+  romanceEnabled: z.boolean().default(false),
+  horrorEnabled: z.boolean().default(false),
+  matureThemesEnabled: z.boolean().default(false),
+  betrayalEnabled: z.boolean().default(false)
+});
+
+export const CanonicalEventSchema = z.object({
+  eventType: z.string().min(1),
+  entityId: z.string().nullable().default(null),
+  occurredAt: z.string().datetime(),
+  metadata: MetadataSchema.default({})
+});
+
+export const ActionPacketSchema = z.object({
+  actionType: z.string().min(1),
+  targetEntityId: z.string().nullable().default(null),
+  method: z.string().nullable().default(null),
+  stance: z.string().nullable().default(null),
+  candidateSkills: z.array(z.string()).default([]),
+  requiresRoll: z.boolean()
+});
+
+export const RollResultSchema = z.object({
+  die: z.number().int().min(1).max(20),
+  modifier: z.number().int(),
+  total: z.number().int(),
+  target: z.number().int()
+});
+
+export const SimulationResultSchema = z.object({
+  rulesetVersion: RulesetVersionSchema,
+  successTier: SuccessTierSchema,
+  roll: RollResultSchema.nullable(),
+  stateDelta: MetadataSchema.default({}),
+  events: z.array(CanonicalEventSchema).default([]),
+  summaryFlags: z.array(z.string()).default([])
+});
+
+export const SaveSnapshotSchema = z.object({
+  saveId: z.string().min(1),
+  revisionId: z.string().min(1),
+  schemaVersion: PersistenceSchemaVersionSchema,
+  snapshotPointer: z.string().min(1),
+  createdAt: z.string().datetime()
+});
+
+export const WorkerReferenceSchema = z.object({
+  jobType: WorkerJobTypeSchema,
+  jobId: z.string().min(1),
+  uniquenessKey: z.string().min(1),
+  status: WorkerJobStatusSchema
+});
+
+export const SummaryJobSchema = z.object({
+  revisionId: z.string().min(1),
+  campaignId: z.string().min(1),
+  saveSlotId: z.string().min(1),
+  schemaVersion: PersistenceSchemaVersionSchema,
+  jobType: z.literal("SUMMARY"),
+  uniquenessKey: z.string().min(1)
+});
+
+export const ImageJobSchema = z.object({
+  revisionId: z.string().min(1),
+  campaignId: z.string().min(1),
+  saveSlotId: z.string().min(1),
+  schemaVersion: PersistenceSchemaVersionSchema,
+  jobType: z.literal("IMAGE"),
+  sceneAnchorId: z.string().min(1),
+  uniquenessKey: z.string().min(1)
+});
+
+export const NarrationJobSchema = z.object({
+  revisionId: z.string().min(1),
+  campaignId: z.string().min(1),
+  saveSlotId: z.string().min(1),
+  schemaVersion: PersistenceSchemaVersionSchema,
+  jobType: z.literal("NARRATION"),
+  uniquenessKey: z.string().min(1)
+});
+
+export const RevisionRecordSchema = z.object({
+  revisionId: z.string().min(1),
+  previousRevisionId: z.string().nullable().default(null),
+  rulesetVersion: RulesetVersionSchema,
+  schemaVersion: PersistenceSchemaVersionSchema,
+  savedAt: z.string().datetime(),
+  playerId: z.string().min(1),
+  runId: z.string().min(1),
+  saveSlotId: z.string().min(1),
+  actionPacket: ActionPacketSchema,
+  simulationResult: SimulationResultSchema,
+  canonicalStatePointer: z.string().min(1),
+  autosaveEligible: z.boolean()
+});
+
+export const TurnRequestSchema = z.object({
+  playerId: z.string().min(1),
+  runId: z.string().min(1),
+  saveSlotId: z.string().min(1),
+  clientTurnId: z.string().min(1),
+  inputText: z.string().min(1),
+  sceneId: z.string().min(1),
+  contentSettings: ContentSettingsSchema,
+  sessionId: z.string().min(1)
+});
+
+export const TurnAuthoritativeResponseSchema = z.object({
+  status: TurnStatusSchema,
+  decision: SafetyDecisionSchema,
+  routeCategory: RouteCategorySchema,
+  revisionId: z.string().nullable().default(null),
+  simulationResult: SimulationResultSchema.nullable(),
+  events: z.array(CanonicalEventSchema).default([]),
+  autosaveStatus: AutosaveStatusSchema,
+  workerJobs: z.array(WorkerReferenceSchema).default([]),
+  playerMessage: z.string().nullable().default(null),
+  rulesetVersion: RulesetVersionSchema
+});
+
+export const ContractSchemas = {
+  SafetyDecision: SafetyDecisionSchema,
+  RouteCategory: RouteCategorySchema,
+  ActionPacket: ActionPacketSchema,
+  SimulationResult: SimulationResultSchema,
+  CanonicalEvent: CanonicalEventSchema,
+  RevisionRecord: RevisionRecordSchema,
+  SaveSnapshot: SaveSnapshotSchema,
+  SummaryJob: SummaryJobSchema,
+  ImageJob: ImageJobSchema,
+  NarrationJob: NarrationJobSchema,
+  TurnRequest: TurnRequestSchema,
+  TurnAuthoritativeResponse: TurnAuthoritativeResponseSchema
+} as const;
+
+export type SafetyDecision = z.infer<typeof SafetyDecisionSchema>;
+export type RouteCategory = z.infer<typeof RouteCategorySchema>;
+export type ActionPacket = z.infer<typeof ActionPacketSchema>;
+export type SimulationResult = z.infer<typeof SimulationResultSchema>;
+export type CanonicalEvent = z.infer<typeof CanonicalEventSchema>;
+export type RevisionRecord = z.infer<typeof RevisionRecordSchema>;
+export type SaveSnapshot = z.infer<typeof SaveSnapshotSchema>;
+export type SummaryJob = z.infer<typeof SummaryJobSchema>;
+export type ImageJob = z.infer<typeof ImageJobSchema>;
+export type NarrationJob = z.infer<typeof NarrationJobSchema>;
+export type TurnRequest = z.infer<typeof TurnRequestSchema>;
+export type TurnAuthoritativeResponse = z.infer<typeof TurnAuthoritativeResponseSchema>;
+
