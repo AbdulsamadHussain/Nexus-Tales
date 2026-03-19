@@ -31,14 +31,15 @@ Player Input
 
 ## Status
 
-Phase 0 scaffold is in place:
+Phase 1 and Phase 2 backend foundations are implemented:
 
-- npm workspaces monorepo
-- shared contracts package
-- mocked authoritative Fastify turn endpoint
-- initial Drizzle PostgreSQL schema
-- Flutter shell
-- CI check for single contract authority
+- shared contracts package with generated JSON Schema and OpenAPI artifacts
+- Fastify `POST /v1/turns` intake path with contract validation
+- deterministic safety gateway decisions, routing, clarification tracking, and idempotency handling
+- deterministic simulation service with revision assembly, event emission, and outbox job references
+- PostgreSQL schema and repository support for turn requests, revisions, clarification state, event logs, and outbox rows
+- backend tests covering replay safety, clarification loops, authoritative commits, resource validation, and policy handling
+- Flutter shell remains scaffolded for later delivery phases
 
 ## Vision
 

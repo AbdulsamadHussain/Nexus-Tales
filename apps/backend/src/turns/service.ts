@@ -250,6 +250,7 @@ function buildCanonicalTurnRequestHash(
     clientTurnId: request.clientTurnId,
     inputText: sanitizedInputText,
     sceneId: request.sceneId.trim(),
+    difficultyMode: request.difficultyMode,
     contentSettings: request.contentSettings
   });
 }

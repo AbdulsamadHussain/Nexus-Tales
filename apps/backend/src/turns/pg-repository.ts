@@ -599,34 +599,6 @@ function createTransaction(client: PoolClient): TurnIntakeTransaction {
     },
     async commitAcceptedTurn(record: PersistedAcceptedTurnCommit) {
       await client.query(
-        `insert into save_snapshots (
-          id,
-          revision_id,
-          save_slot_id,
-          campaign_id,
-          schema_version,
-          snapshot_pointer,
-          canonical_state,
-          saved_at,
-          save_kind,
-          display_name
-        )
-        values ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10)`,
-        [
-          record.saveSnapshot.saveId,
-          record.saveSnapshot.gameRevision,
-          record.saveSnapshot.saveSlotId,
-          record.saveSnapshot.campaignId,
-          record.saveSnapshot.schemaVersion,
-          record.saveSnapshot.snapshotPointer,
-          JSON.stringify(record.saveSnapshot.canonicalState),
-          record.saveSnapshot.savedAt,
-          "REVISION",
-          null
-        ]
-      );
-
-      await client.query(
         `insert into revisions (
           id,
           run_id,
@@ -661,6 +633,34 @@ function createTransaction(client: PoolClient): TurnIntakeTransaction {
           record.revision.autosaveEligible,
           record.revision.summaryJobQueued,
           record.revision.summaryKind
+        ]
+      );
+
+      await client.query(
+        `insert into save_snapshots (
+          id,
+          revision_id,
+          save_slot_id,
+          campaign_id,
+          schema_version,
+          snapshot_pointer,
+          canonical_state,
+          saved_at,
+          save_kind,
+          display_name
+        )
+        values ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10)`,
+        [
+          record.saveSnapshot.saveId,
+          record.saveSnapshot.gameRevision,
+          record.saveSnapshot.saveSlotId,
+          record.saveSnapshot.campaignId,
+          record.saveSnapshot.schemaVersion,
+          record.saveSnapshot.snapshotPointer,
+          JSON.stringify(record.saveSnapshot.canonicalState),
+          record.saveSnapshot.savedAt,
+          "REVISION",
+          null
         ]
       );
 
@@ -776,34 +776,6 @@ function createTransaction(client: PoolClient): TurnIntakeTransaction {
     },
     async commitRollback(record: PersistedRollbackCommit) {
       await client.query(
-        `insert into save_snapshots (
-          id,
-          revision_id,
-          save_slot_id,
-          campaign_id,
-          schema_version,
-          snapshot_pointer,
-          canonical_state,
-          saved_at,
-          save_kind,
-          display_name
-        )
-        values ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10)`,
-        [
-          record.saveSnapshot.saveId,
-          record.saveSnapshot.gameRevision,
-          record.saveSnapshot.saveSlotId,
-          record.saveSnapshot.campaignId,
-          record.saveSnapshot.schemaVersion,
-          record.saveSnapshot.snapshotPointer,
-          JSON.stringify(record.saveSnapshot.canonicalState),
-          record.saveSnapshot.savedAt,
-          "REVISION",
-          null
-        ]
-      );
-
-      await client.query(
         `insert into revisions (
           id,
           run_id,
@@ -838,6 +810,34 @@ function createTransaction(client: PoolClient): TurnIntakeTransaction {
           record.revision.autosaveEligible,
           record.revision.summaryJobQueued,
           record.revision.summaryKind
+        ]
+      );
+
+      await client.query(
+        `insert into save_snapshots (
+          id,
+          revision_id,
+          save_slot_id,
+          campaign_id,
+          schema_version,
+          snapshot_pointer,
+          canonical_state,
+          saved_at,
+          save_kind,
+          display_name
+        )
+        values ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10)`,
+        [
+          record.saveSnapshot.saveId,
+          record.saveSnapshot.gameRevision,
+          record.saveSnapshot.saveSlotId,
+          record.saveSnapshot.campaignId,
+          record.saveSnapshot.schemaVersion,
+          record.saveSnapshot.snapshotPointer,
+          JSON.stringify(record.saveSnapshot.canonicalState),
+          record.saveSnapshot.savedAt,
+          "REVISION",
+          null
         ]
       );
 
