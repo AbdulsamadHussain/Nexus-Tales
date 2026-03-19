@@ -54,7 +54,10 @@ const fileEnv = loadDotEnv();
 
 const EnvSchema = z.object({
   DATABASE_URL: z.string().url().or(z.string().startsWith("postgres://")),
+  DATABASE_POOL_MAX: z.coerce.number().int().positive().default(10),
   PORT: z.coerce.number().int().positive().default(3000),
+  AUTOSAVE_RING_SIZE: z.coerce.number().int().positive().default(5),
+  MANUAL_SAVE_LIMIT: z.coerce.number().int().positive().default(12),
   ENABLE_PARSER_ASSISTANCE: z
     .enum(["true", "false"])
     .optional()
@@ -68,7 +71,13 @@ export const env = EnvSchema.parse({
     process.env.DATABASE_URL ??
     fileEnv.DATABASE_URL ??
     "postgres://postgres:postgres@localhost:5432/nexus_tales",
+  DATABASE_POOL_MAX:
+    process.env.DATABASE_POOL_MAX ?? fileEnv.DATABASE_POOL_MAX ?? "10",
   PORT: process.env.PORT ?? fileEnv.PORT ?? "3000",
+  AUTOSAVE_RING_SIZE:
+    process.env.AUTOSAVE_RING_SIZE ?? fileEnv.AUTOSAVE_RING_SIZE ?? "5",
+  MANUAL_SAVE_LIMIT:
+    process.env.MANUAL_SAVE_LIMIT ?? fileEnv.MANUAL_SAVE_LIMIT ?? "12",
   ENABLE_PARSER_ASSISTANCE:
     process.env.ENABLE_PARSER_ASSISTANCE ?? fileEnv.ENABLE_PARSER_ASSISTANCE,
   SUPABASE_URL: process.env.SUPABASE_URL ?? fileEnv.SUPABASE_URL,

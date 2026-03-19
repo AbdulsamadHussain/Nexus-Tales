@@ -16,6 +16,8 @@ import type {
   ClarificationStateRecord,
   TurnIntakeRepository
 } from "./repository.js";
+import { simulateAcceptedTurn } from "./simulation.js";
+import type { InitialCanonicalStateProvider } from "./state.js";
 
 const HARD_REJECT_PATTERNS = [
   /\b(?:build|make)\s+(?:a\s+)?bomb\b/i,
@@ -214,12 +216,17 @@ export interface TurnIntakeService {
 type SafetyAssessment = {
   decision: SafetyDecision;
   effectiveInputText: string;
+  policyFlags: string[];
+  narrationConstraints: string[];
+  transformationReason: string | null;
   playerMessage: string | null;
+  retryAllowed: boolean;
 };
 
 type RoutingAssessment = {
   routeCategory: RouteCategory;
   parserStatus: ParserAssistanceStatus;
+  authoritativeActionPacket: ActionPacket | null;
   advisoryActionPacket: ActionPacket | null;
   targetFingerprint: string | null;
 };
@@ -232,16 +239,49 @@ function normalizeForParsing(inputText: string) {
     .trim();
 }
 
+function buildCanonicalTurnRequestHash(
+  request: TurnRequest,
+  sanitizedInputText: string
+) {
+  return buildStableHash({
+    playerId: request.playerId,
+    runId: request.runId,
+    saveSlotId: request.saveSlotId,
+    clientTurnId: request.clientTurnId,
+    inputText: sanitizedInputText,
+    sceneId: request.sceneId.trim(),
+    contentSettings: request.contentSettings
+  });
+}
+
+function buildSafetyAssessment(assessment: SafetyAssessment): SafetyAssessment {
+  return {
+    ...assessment,
+    policyFlags: [...new Set(assessment.policyFlags)].sort((left, right) =>
+      left.localeCompare(right)
+    ),
+    narrationConstraints: [...new Set(assessment.narrationConstraints)].sort((left, right) =>
+      left.localeCompare(right)
+    )
+  };
+}
+
 function evaluateSafety(
   inputText: string,
   contentSettings: TurnRequest["contentSettings"]
 ): SafetyAssessment {
+  const fallbackSanitizedInput = sanitizeInputText(inputText) || inputText.trim();
+
   if (HARD_REJECT_PATTERNS.some((pattern) => pattern.test(inputText))) {
-    return {
+    return buildSafetyAssessment({
       decision: "REJECT",
-      effectiveInputText: inputText,
-      playerMessage: "That action cannot be processed."
-    };
+      effectiveInputText: fallbackSanitizedInput,
+      policyFlags: ["HARD_BLOCK_UNSAFE_ACTION"],
+      narrationConstraints: [],
+      transformationReason: null,
+      playerMessage: "That action cannot be processed.",
+      retryAllowed: true
+    });
   }
 
   let effectiveInputText = inputText;
@@ -259,57 +299,95 @@ function evaluateSafety(
   effectiveInputText = sanitizeInputText(effectiveInputText);
 
   if (!effectiveInputText) {
-    return {
+    return buildSafetyAssessment({
       decision: "REJECT",
-      effectiveInputText: inputText,
-      playerMessage: "Describe the in-world action instead of system instructions."
-    };
+      effectiveInputText: fallbackSanitizedInput,
+      policyFlags: ["EMPTY_AFTER_SANITIZATION"],
+      narrationConstraints: [],
+      transformationReason: "Prompt-control text removed the actionable portion of the request.",
+      playerMessage: "Describe the in-world action instead of system instructions.",
+      retryAllowed: true
+    });
   }
 
   const loweredInput = effectiveInputText.toLowerCase();
+
+  const matchingCustomExclusion = contentSettings.customExclusions.find((candidate) => {
+    const normalizedCandidate = sanitizeInputText(candidate).toLowerCase();
+
+    return normalizedCandidate.length > 0 && loweredInput.includes(normalizedCandidate);
+  });
+
+  if (matchingCustomExclusion) {
+    return buildSafetyAssessment({
+      decision: "REJECT",
+      effectiveInputText,
+      policyFlags: ["CUSTOM_EXCLUSION_MATCH"],
+      narrationConstraints: [],
+      transformationReason: null,
+      playerMessage: "That action is blocked by your current custom exclusions.",
+      retryAllowed: true
+    });
+  }
 
   if (
     contentSettings.romanceEnabled === false &&
     /\b(?:kiss|flirt|seduce|romance)\b/i.test(loweredInput)
   ) {
-    return {
+    return buildSafetyAssessment({
       decision: "ALLOW_WITH_CONSTRAINTS",
       effectiveInputText,
-      playerMessage: "Romance is disabled, so the action will stay non-romantic."
-    };
+      policyFlags: ["ROMANCE_DISABLED"],
+      narrationConstraints: ["NO_ROMANCE"],
+      transformationReason: null,
+      playerMessage: "Romance is disabled, so the action will stay non-romantic.",
+      retryAllowed: true
+    });
   }
 
   if (
     contentSettings.horrorEnabled === false &&
     /\b(?:haunt|eldritch|horror|ritual sacrifice|necromanc(?:y|er))\b/i.test(loweredInput)
   ) {
-    return {
+    return buildSafetyAssessment({
       decision: "ALLOW_WITH_CONSTRAINTS",
       effectiveInputText,
-      playerMessage: "Horror content is constrained by your current settings."
-    };
+      policyFlags: ["HORROR_DISABLED"],
+      narrationConstraints: ["NO_HORROR_ESCALATION"],
+      transformationReason: null,
+      playerMessage: "Horror content is constrained by your current settings.",
+      retryAllowed: true
+    });
   }
 
   if (
     contentSettings.matureThemesEnabled === false &&
     /\b(?:drug|torture|explicit|sex)\b/i.test(loweredInput)
   ) {
-    return {
+    return buildSafetyAssessment({
       decision: "ALLOW_WITH_CONSTRAINTS",
       effectiveInputText,
-      playerMessage: "Mature themes are disabled, so the action will be toned down."
-    };
+      policyFlags: ["MATURE_THEMES_DISABLED"],
+      narrationConstraints: ["NO_GRAPHIC_MATURE_CONTENT"],
+      transformationReason: null,
+      playerMessage: "Mature themes are disabled, so the action will be toned down.",
+      retryAllowed: true
+    });
   }
 
   if (
     contentSettings.betrayalEnabled === false &&
     /\b(?:betray|double[- ]cross|backstab|steal from)\b/i.test(loweredInput)
   ) {
-    return {
+    return buildSafetyAssessment({
       decision: "ALLOW_WITH_CONSTRAINTS",
       effectiveInputText,
-      playerMessage: "Betrayal is disabled, so the action cannot target allies that way."
-    };
+      policyFlags: ["BETRAYAL_DISABLED"],
+      narrationConstraints: ["NO_ALLY_BETRAYAL"],
+      transformationReason: null,
+      playerMessage: "Betrayal is disabled, so the action cannot target allies that way.",
+      retryAllowed: true
+    });
   }
 
   if (
@@ -318,26 +396,38 @@ function evaluateSafety(
     (contentSettings.violenceLevel === "MEDIUM" &&
       /\b(?:behead|dismember)\b/i.test(loweredInput))
   ) {
-    return {
+    return buildSafetyAssessment({
       decision: "ALLOW_WITH_CONSTRAINTS",
       effectiveInputText,
-      playerMessage: "Violence is constrained by your current settings."
-    };
+      policyFlags: ["VIOLENCE_CONSTRAINED"],
+      narrationConstraints: ["NO_GORE"],
+      transformationReason: null,
+      playerMessage: "Violence is constrained by your current settings.",
+      retryAllowed: true
+    });
   }
 
   if (wasTransformed) {
-    return {
+    return buildSafetyAssessment({
       decision: "TRANSFORM",
       effectiveInputText,
-      playerMessage: "System-level instructions were stripped before routing the action."
-    };
+      policyFlags: ["PROMPT_INJECTION_STRIPPED"],
+      narrationConstraints: [],
+      transformationReason: "Prompt-control language was removed before routing.",
+      playerMessage: "System-level instructions were stripped before routing the action.",
+      retryAllowed: true
+    });
   }
 
-  return {
+  return buildSafetyAssessment({
     decision: "ALLOW",
     effectiveInputText,
-    playerMessage: null
-  };
+    policyFlags: [],
+    narrationConstraints: [],
+    transformationReason: null,
+    playerMessage: null,
+    retryAllowed: true
+  });
 }
 
 function parseActionPacket(inputText: string): ActionPacket | null {
@@ -381,6 +471,7 @@ function assessRouting(
     return {
       routeCategory: "UI_ACTION",
       parserStatus: parserAssistanceEnabled ? "NO_MATCH" : "DISABLED",
+      authoritativeActionPacket: null,
       advisoryActionPacket: null,
       targetFingerprint: null
     };
@@ -419,7 +510,7 @@ function assessRouting(
     GENERIC_AMBIGUOUS_INPUTS.has(normalizedInput) ||
     ambiguousPronoun ||
     missingTargetOnShortKnownVerb ||
-    (!classifiedActionPacket && normalizedInput.split(/\s+/).length <= 2)
+    !classifiedActionPacket
       ? "CLARIFICATION_REQUIRED"
       : wasTransformed
         ? "SYSTEM_TRANSFORMED_ACTION"
@@ -434,6 +525,7 @@ function assessRouting(
   return {
     routeCategory,
     parserStatus,
+    authoritativeActionPacket: classifiedActionPacket,
     advisoryActionPacket,
     targetFingerprint
   };
@@ -445,7 +537,7 @@ function buildClarificationResponseMessage(
   targetFingerprint: string | null
 ) {
   if (ambiguityCount >= 3) {
-    return "I still need a clearer action and target before I can proceed. Rephrase with one concrete verb and object.";
+    return "I could not resolve that after repeated ambiguous attempts, so no authoritative turn was committed. Rephrase with one concrete verb and object when you are ready.";
   }
 
   if (!targetFingerprint) {
@@ -492,6 +584,7 @@ function buildAcceptedMessage(
 export function createTurnIntakeService(options: {
   repository: TurnIntakeRepository;
   featureFlags?: Partial<TurnFeatureFlags>;
+  initialCanonicalStateProvider?: InitialCanonicalStateProvider;
 }): TurnIntakeService {
   const featureFlags: TurnFeatureFlags = {
     parserAssistanceEnabled: options.featureFlags?.parserAssistanceEnabled ?? false
@@ -500,10 +593,19 @@ export function createTurnIntakeService(options: {
   return {
     async handleTurn(request) {
       const sanitizedInputText = sanitizeInputText(request.inputText);
-      const requestHash = buildStableHash(request);
+      const requestHash = buildCanonicalTurnRequestHash(request, sanitizedInputText);
       const sceneFingerprint = buildFingerprint(request.sceneId);
       const inputFingerprint = buildFingerprint(sanitizedInputText.toLowerCase());
       const safetyAssessment = evaluateSafety(sanitizedInputText, request.contentSettings);
+      const policy = {
+        decision: safetyAssessment.decision,
+        sanitizedInput: safetyAssessment.effectiveInputText,
+        policyFlags: safetyAssessment.policyFlags,
+        narrationConstraints: safetyAssessment.narrationConstraints,
+        transformationReason: safetyAssessment.transformationReason,
+        playerMessage: safetyAssessment.playerMessage,
+        retryAllowed: safetyAssessment.retryAllowed
+      };
       const routingAssessment =
         safetyAssessment.decision === "REJECT"
           ? {
@@ -511,6 +613,7 @@ export function createTurnIntakeService(options: {
               parserStatus: featureFlags.parserAssistanceEnabled
                 ? ("NO_MATCH" as const)
                 : ("DISABLED" as const),
+              authoritativeActionPacket: null,
               advisoryActionPacket: null,
               targetFingerprint: null
             }
@@ -563,7 +666,7 @@ export function createTurnIntakeService(options: {
             routingAssessment.targetFingerprint,
             inputFingerprint
           )
-            ? (previousClarification?.ambiguityCount ?? 0) + 1
+            ? Math.min((previousClarification?.ambiguityCount ?? 0) + 1, 3)
             : 1;
 
           const storedClarification = await tx.upsertClarificationState({
@@ -584,7 +687,8 @@ export function createTurnIntakeService(options: {
             lastRouteCategory: storedClarification.lastRouteCategory
           };
 
-          status = "CLARIFICATION_REQUIRED";
+          status =
+            storedClarification.ambiguityCount >= 3 ? "NO_OP" : "CLARIFICATION_REQUIRED";
           playerMessage = buildClarificationResponseMessage(
             storedClarification.ambiguityCount,
             safetyAssessment.effectiveInputText,
@@ -605,18 +709,61 @@ export function createTurnIntakeService(options: {
           );
         }
 
+        const intake = {
+          sanitizedInputText: safetyAssessment.effectiveInputText,
+          parserStatus: routingAssessment.parserStatus,
+          advisoryActionPacket: routingAssessment.advisoryActionPacket,
+          sceneFingerprint,
+          targetFingerprint: routingAssessment.targetFingerprint,
+          clarification
+        };
+
+        if (status === "ACCEPTED") {
+          const runState = await tx.getRunState(
+            request.playerId,
+            request.runId,
+            request.saveSlotId
+          );
+          const commitPlan = simulateAcceptedTurn({
+            request,
+            requestHash,
+            decision: safetyAssessment.decision,
+            policy,
+            routeCategory: routingAssessment.routeCategory,
+            intake,
+            safetyMessage: safetyAssessment.playerMessage,
+            authoritativeActionPacket: routingAssessment.authoritativeActionPacket,
+            runState,
+            initialCanonicalStateProvider: options.initialCanonicalStateProvider
+          });
+
+          await tx.commitAcceptedTurn({
+            turnRequest: {
+              playerId: request.playerId,
+              runId: request.runId,
+              saveSlotId: request.saveSlotId,
+              clientTurnId: request.clientTurnId,
+              requestHash,
+              revisionId: commitPlan.revision.revisionId,
+              status: commitPlan.response.status,
+              responsePayload: commitPlan.response
+            },
+            revision: commitPlan.revision,
+            saveSnapshot: commitPlan.saveSnapshot,
+            eventLogs: commitPlan.eventLogs,
+            outboxEvents: commitPlan.outboxEvents,
+            checkpointRecords: commitPlan.checkpointRecords
+          });
+
+          return commitPlan.response;
+        }
+
         const response = TurnAuthoritativeResponseSchema.parse({
           status,
           decision: safetyAssessment.decision,
+          policy,
           routeCategory: routingAssessment.routeCategory,
-          intake: {
-            sanitizedInputText: safetyAssessment.effectiveInputText,
-            parserStatus: routingAssessment.parserStatus,
-            advisoryActionPacket: routingAssessment.advisoryActionPacket,
-            sceneFingerprint,
-            targetFingerprint: routingAssessment.targetFingerprint,
-            clarification
-          },
+          intake,
           revisionId: null,
           simulationResult: null,
           events: [],
@@ -632,6 +779,7 @@ export function createTurnIntakeService(options: {
           saveSlotId: request.saveSlotId,
           clientTurnId: request.clientTurnId,
           requestHash,
+          revisionId: null,
           status: response.status,
           responsePayload: response
         });

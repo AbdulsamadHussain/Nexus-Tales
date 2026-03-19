@@ -27,7 +27,6 @@ export const runs = pgTable("runs", {
   id: text("id").primaryKey(),
   userId: text("user_id").notNull().references(() => users.id),
   campaignId: text("campaign_id").notNull().references(() => campaigns.id),
-  activeRevisionId: text("active_revision_id"),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull()
 });
@@ -35,6 +34,7 @@ export const runs = pgTable("runs", {
 export const saveSlots = pgTable("save_slots", {
   id: text("id").primaryKey(),
   runId: text("run_id").notNull().references(() => runs.id),
+  activeRevisionId: text("active_revision_id"),
   slotType: text("slot_type").notNull(),
   displayName: text("display_name").notNull(),
   isProtected: boolean("is_protected").default(false).notNull(),
@@ -49,10 +49,29 @@ export const revisions = pgTable("revisions", {
   previousRevisionId: text("previous_revision_id"),
   rulesetVersion: text("ruleset_version").notNull(),
   schemaVersion: integer("schema_version").notNull(),
+  canonicalState: jsonb("canonical_state").notNull(),
   canonicalStatePointer: text("canonical_state_pointer").notNull(),
   actionPacket: jsonb("action_packet").notNull(),
   simulationResult: jsonb("simulation_result").notNull(),
+  commitKind: text("commit_kind").notNull(),
+  restoredFromRevisionId: text("restored_from_revision_id"),
   autosaveEligible: boolean("autosave_eligible").default(false).notNull(),
+  summaryJobQueued: boolean("summary_job_queued").default(false).notNull(),
+  summaryKind: text("summary_kind"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull()
+});
+
+export const saveSnapshots = pgTable("save_snapshots", {
+  id: text("id").primaryKey(),
+  revisionId: text("revision_id").notNull().references(() => revisions.id),
+  saveSlotId: text("save_slot_id").notNull().references(() => saveSlots.id),
+  campaignId: text("campaign_id").notNull().references(() => campaigns.id),
+  schemaVersion: integer("schema_version").notNull(),
+  snapshotPointer: text("snapshot_pointer").notNull(),
+  canonicalState: jsonb("canonical_state").notNull(),
+  savedAt: timestamp("saved_at", { withTimezone: true }).notNull(),
+  saveKind: text("save_kind").notNull(),
+  displayName: text("display_name"),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull()
 });
 
@@ -155,6 +174,7 @@ export const clarificationState = pgTable(
 export const migrationRecords = pgTable("migration_records", {
   id: text("id").primaryKey(),
   revisionId: text("revision_id"),
+  saveId: text("save_id").references(() => saveSnapshots.id),
   fromSchemaVersion: integer("from_schema_version").notNull(),
   toSchemaVersion: integer("to_schema_version").notNull(),
   status: text("status").notNull(),

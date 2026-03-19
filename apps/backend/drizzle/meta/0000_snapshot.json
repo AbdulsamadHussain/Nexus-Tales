@@ -733,12 +733,6 @@
           "primaryKey": false,
           "notNull": true
         },
-        "active_revision_id": {
-          "name": "active_revision_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
         "created_at": {
           "name": "created_at",
           "type": "timestamp with time zone",
@@ -804,6 +798,12 @@
           "type": "text",
           "primaryKey": false,
           "notNull": true
+        },
+        "active_revision_id": {
+          "name": "active_revision_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
         },
         "slot_type": {
           "name": "slot_type",

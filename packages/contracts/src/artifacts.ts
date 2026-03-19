@@ -86,6 +86,153 @@ export function buildArtifacts() {
             }
           }
         }
+      },
+      "/v1/saves/manual": {
+        post: {
+          summary: "Create a manual save from the active authoritative revision",
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: {
+                  $ref: "#/components/schemas/ManualSaveRequest"
+                }
+              }
+            }
+          },
+          responses: {
+            "200": {
+              description: "Manual save created",
+              content: {
+                "application/json": {
+                  schema: {
+                    $ref: "#/components/schemas/ManualSaveResponse"
+                  }
+                }
+              }
+            },
+            "400": {
+              description: "Invalid request payload",
+              content: {
+                "application/json": {
+                  schema: {
+                    $ref: "#/components/schemas/ErrorResponse"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "/v1/saves/rollback": {
+        post: {
+          summary: "Restore a revision, checkpoint, or saved snapshot into the active save slot",
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: {
+                  $ref: "#/components/schemas/RollbackRequest"
+                }
+              }
+            }
+          },
+          responses: {
+            "200": {
+              description: "Rollback committed",
+              content: {
+                "application/json": {
+                  schema: {
+                    $ref: "#/components/schemas/RollbackResponse"
+                  }
+                }
+              }
+            },
+            "400": {
+              description: "Invalid request payload",
+              content: {
+                "application/json": {
+                  schema: {
+                    $ref: "#/components/schemas/ErrorResponse"
+                  }
+                }
+              }
+            },
+            "404": {
+              description: "Requested rollback target not found",
+              content: {
+                "application/json": {
+                  schema: {
+                    $ref: "#/components/schemas/ErrorResponse"
+                  }
+                }
+              }
+            },
+            "422": {
+              description: "Save migration failed safely",
+              content: {
+                "application/json": {
+                  schema: {
+                    $ref: "#/components/schemas/ErrorResponse"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "/v1/runs/{runId}/save-slots/{saveSlotId}/history": {
+        get: {
+          summary: "List revision history, manual saves, autosaves, and checkpoints",
+          parameters: [
+            {
+              name: "runId",
+              in: "path",
+              required: true,
+              schema: {
+                type: "string"
+              }
+            },
+            {
+              name: "saveSlotId",
+              in: "path",
+              required: true,
+              schema: {
+                type: "string"
+              }
+            },
+            {
+              name: "playerId",
+              in: "query",
+              required: true,
+              schema: {
+                type: "string"
+              }
+            }
+          ],
+          responses: {
+            "200": {
+              description: "History loaded",
+              content: {
+                "application/json": {
+                  schema: {
+                    $ref: "#/components/schemas/RevisionHistoryResponse"
+                  }
+                }
+              }
+            },
+            "400": {
+              description: "Invalid request payload",
+              content: {
+                "application/json": {
+                  schema: {
+                    $ref: "#/components/schemas/ErrorResponse"
+                  }
+                }
+              }
+            }
+          }
+        }
       }
     },
     components: {

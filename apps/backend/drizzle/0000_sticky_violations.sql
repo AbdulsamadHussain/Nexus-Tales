@@ -57,6 +57,7 @@ CREATE TABLE "job_records" (
 CREATE TABLE "migration_records" (
 	"id" text PRIMARY KEY NOT NULL,
 	"revision_id" text,
+	"save_id" text,
 	"from_schema_version" integer NOT NULL,
 	"to_schema_version" integer NOT NULL,
 	"status" text NOT NULL,
@@ -74,6 +75,20 @@ CREATE TABLE "outbox_events" (
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL
 );
 --> statement-breakpoint
+CREATE TABLE "save_snapshots" (
+	"id" text PRIMARY KEY NOT NULL,
+	"revision_id" text NOT NULL,
+	"save_slot_id" text NOT NULL,
+	"campaign_id" text NOT NULL,
+	"schema_version" integer NOT NULL,
+	"snapshot_pointer" text NOT NULL,
+	"canonical_state" jsonb NOT NULL,
+	"saved_at" timestamp with time zone NOT NULL,
+	"save_kind" text NOT NULL,
+	"display_name" text,
+	"created_at" timestamp with time zone DEFAULT now() NOT NULL
+);
+--> statement-breakpoint
 CREATE TABLE "revisions" (
 	"id" text PRIMARY KEY NOT NULL,
 	"run_id" text NOT NULL,
@@ -81,10 +96,15 @@ CREATE TABLE "revisions" (
 	"previous_revision_id" text,
 	"ruleset_version" text NOT NULL,
 	"schema_version" integer NOT NULL,
+	"canonical_state" jsonb NOT NULL,
 	"canonical_state_pointer" text NOT NULL,
 	"action_packet" jsonb NOT NULL,
 	"simulation_result" jsonb NOT NULL,
+	"commit_kind" text NOT NULL,
+	"restored_from_revision_id" text,
 	"autosave_eligible" boolean DEFAULT false NOT NULL,
+	"summary_job_queued" boolean DEFAULT false NOT NULL,
+	"summary_kind" text,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL
 );
 --> statement-breakpoint
@@ -92,7 +112,6 @@ CREATE TABLE "runs" (
 	"id" text PRIMARY KEY NOT NULL,
 	"user_id" text NOT NULL,
 	"campaign_id" text NOT NULL,
-	"active_revision_id" text,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
 	"updated_at" timestamp with time zone DEFAULT now() NOT NULL
 );
@@ -100,6 +119,7 @@ CREATE TABLE "runs" (
 CREATE TABLE "save_slots" (
 	"id" text PRIMARY KEY NOT NULL,
 	"run_id" text NOT NULL,
+	"active_revision_id" text,
 	"slot_type" text NOT NULL,
 	"display_name" text NOT NULL,
 	"is_protected" boolean DEFAULT false NOT NULL,
@@ -136,6 +156,10 @@ ALTER TABLE "clarification_state" ADD CONSTRAINT "clarification_state_save_slot_
 ALTER TABLE "event_logs" ADD CONSTRAINT "event_logs_revision_id_revisions_id_fk" FOREIGN KEY ("revision_id") REFERENCES "public"."revisions"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "job_records" ADD CONSTRAINT "job_records_revision_id_revisions_id_fk" FOREIGN KEY ("revision_id") REFERENCES "public"."revisions"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "outbox_events" ADD CONSTRAINT "outbox_events_revision_id_revisions_id_fk" FOREIGN KEY ("revision_id") REFERENCES "public"."revisions"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "save_snapshots" ADD CONSTRAINT "save_snapshots_revision_id_revisions_id_fk" FOREIGN KEY ("revision_id") REFERENCES "public"."revisions"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "save_snapshots" ADD CONSTRAINT "save_snapshots_save_slot_id_save_slots_id_fk" FOREIGN KEY ("save_slot_id") REFERENCES "public"."save_slots"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "save_snapshots" ADD CONSTRAINT "save_snapshots_campaign_id_campaigns_id_fk" FOREIGN KEY ("campaign_id") REFERENCES "public"."campaigns"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "migration_records" ADD CONSTRAINT "migration_records_save_id_save_snapshots_id_fk" FOREIGN KEY ("save_id") REFERENCES "public"."save_snapshots"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "revisions" ADD CONSTRAINT "revisions_run_id_runs_id_fk" FOREIGN KEY ("run_id") REFERENCES "public"."runs"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "revisions" ADD CONSTRAINT "revisions_save_slot_id_save_slots_id_fk" FOREIGN KEY ("save_slot_id") REFERENCES "public"."save_slots"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "runs" ADD CONSTRAINT "runs_user_id_users_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint

@@ -46,16 +46,19 @@ export async function registerTurnRoutes(
 
       request.log.info(
         {
-          eventName: "turns.phase1.intake_resolved",
+          eventName: "turns.authoritative_response_ready",
           status: response.status,
           decision: response.decision,
+          policyFlags: response.policy.policyFlags,
+          narrationConstraints: response.policy.narrationConstraints,
           routeCategory: response.routeCategory,
+          revisionId: response.revisionId,
           playerId: parsed.data.playerId,
           runId: parsed.data.runId,
           saveSlotId: parsed.data.saveSlotId,
           clientTurnId: parsed.data.clientTurnId
         },
-        "Resolved turn intake."
+        "Resolved turn request."
       );
 
       return reply.status(200).send(response);
