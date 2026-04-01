@@ -19,6 +19,9 @@ dependencies:
   # Routing
   go_router: ^14.0.0
 
+  # Networking
+  dio: ^5.4.0
+
   # Data & Serialization
   freezed_annotation: ^2.4.0
   json_annotation: ^4.8.0
@@ -27,6 +30,7 @@ dependencies:
   # Utils
   intl: ^0.20.0
   equatable: ^2.0.5
+  uuid: ^4.0.0
 
 dev_dependencies:
   flutter_test:
