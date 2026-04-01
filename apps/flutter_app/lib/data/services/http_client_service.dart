@@ -118,7 +118,13 @@ class HttpClientService {
     while (true) {
       try {
         final response = await request();
-        return response.data;
+        final data = response.data;
+        if (data != null) {
+          return data;
+        }
+        throw UnknownNetworkException(
+          message: 'Response data is null',
+        );
       } on NetworkException catch (e) {
         if (!e.isRetryable || retries >= NetworkConfig.maxRetries) {
           rethrow;
@@ -151,30 +157,19 @@ class HttpClientService {
 class _LoggingInterceptor extends Interceptor {
   @override
   void onRequest(RequestOptions options, RequestInterceptorHandler handler) {
-    print(
-      '[HTTP] → ${options.method} ${options.path}\n'
-      '   Headers: ${options.headers}\n'
-      '   Data: ${options.data}',
-    );
+    // Request logging can be implemented via debugLogRequest if needed
     handler.next(options);
   }
 
   @override
   void onResponse(Response response, ResponseInterceptorHandler handler) {
-    print(
-      '[HTTP] ← ${response.statusCode} ${response.requestOptions.path}\n'
-      '   Data: ${response.data}',
-    );
+    // Response logging can be implemented via debugLogResponse if needed
     handler.next(response);
   }
 
   @override
   void onError(DioException err, ErrorInterceptorHandler handler) {
-    print(
-      '[HTTP] ✗ ${err.requestOptions.method} ${err.requestOptions.path}\n'
-      '   Error: ${err.message}\n'
-      '   Response: ${err.response?.data}',
-    );
+    // Error logging can be implemented via debugLogError if needed
     handler.next(err);
   }
 }
@@ -249,10 +244,9 @@ class _ErrorHandlingInterceptor extends Interceptor {
           stackTrace: StackTrace.current,
         );
 
-      case DioExceptionType.badRequest:
-        return HttpException(
-          statusCode: 400,
-          message: 'Bad request',
+      case DioExceptionType.badCertificate:
+        return UnknownNetworkException(
+          message: 'Bad certificate',
           originalError: err,
           stackTrace: StackTrace.current,
         );
@@ -266,9 +260,12 @@ class _ErrorHandlingInterceptor extends Interceptor {
     // Handle special error codes from backend
     if (responseBody is Map<String, dynamic>) {
       final errorCode = responseBody['error_code'] as String?;
-      final errorMessage = responseBody['message'] as String? ?? '';
+      final String errorMessage = switch (responseBody['message']) {
+        String msg => msg,
+        _ => '',
+      };
 
-      if (errorCode == 'CLARIFICATION_REQUIRED') {
+      if (errorCode is String && errorCode == 'CLARIFICATION_REQUIRED') {
         return ClarificationRequiredException(
           prompt: responseBody['clarification_prompt'] ?? 'Please clarify',
           clientTurnIdForRetry: responseBody['client_turn_id'] ?? '',
@@ -278,7 +275,7 @@ class _ErrorHandlingInterceptor extends Interceptor {
         );
       }
 
-      if (errorCode == 'IDEMPOTENCY_CONFLICT') {
+      if (errorCode is String && errorCode == 'IDEMPOTENCY_CONFLICT') {
         return IdempotencyConflictException(
           clientTurnId: responseBody['client_turn_id'] ?? '',
           originalRequestHash:
@@ -290,7 +287,7 @@ class _ErrorHandlingInterceptor extends Interceptor {
         );
       }
 
-      if (errorCode == 'SAFE_REJECT') {
+      if (errorCode is String && errorCode == 'SAFE_REJECT') {
         return SafeRejectException(
           errorCode: errorCode,
           message: errorMessage,
@@ -300,7 +297,7 @@ class _ErrorHandlingInterceptor extends Interceptor {
         );
       }
 
-      if (errorCode == 'CONFLICT') {
+      if (errorCode is String && errorCode == 'CONFLICT') {
         return SafeRejectException(
           errorCode: 'CONFLICT',
           message: 'Action conflicts with server state. Please try again.',

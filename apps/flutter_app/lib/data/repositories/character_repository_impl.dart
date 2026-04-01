@@ -41,12 +41,13 @@ class CharacterRepositoryImpl implements CharacterRepository {
   @override
   Future<List<Quest>> fetchQuests(String runId) async {
     try {
-      final response = await _httpClient.get<List<dynamic>>(
+      final response = await _httpClient.get<Map<String, dynamic>>(
         '${NetworkConfig.characterEndpoint}/$runId/quests',
       );
 
-      final questDtos = (response as List)
-          .cast<Map<String, dynamic>>()
+      final questList = response['quests'] as List<dynamic>? ?? [];
+      final questDtos = questList
+          .whereType<Map<String, dynamic>>()
           .map((json) => QuestDto.fromJson(json))
           .toList();
 
@@ -65,12 +66,13 @@ class CharacterRepositoryImpl implements CharacterRepository {
   @override
   Future<List<InventoryItem>> fetchInventory(String runId) async {
     try {
-      final response = await _httpClient.get<List<dynamic>>(
+      final response = await _httpClient.get<Map<String, dynamic>>(
         '${NetworkConfig.characterEndpoint}/$runId/inventory',
       );
 
-      final itemDtos = (response as List)
-          .cast<Map<String, dynamic>>()
+      final inventoryList = response['inventory'] as List<dynamic>? ?? [];
+      final itemDtos = inventoryList
+          .whereType<Map<String, dynamic>>()
           .map((json) => InventoryItemDto.fromJson(json))
           .toList();
 
@@ -89,12 +91,13 @@ class CharacterRepositoryImpl implements CharacterRepository {
   @override
   Future<List<CodexEntry>> fetchCodexEntries(String runId) async {
     try {
-      final response = await _httpClient.get<List<dynamic>>(
+      final response = await _httpClient.get<Map<String, dynamic>>(
         '${NetworkConfig.characterEndpoint}/$runId/codex',
       );
 
-      final codexDtos = (response as List)
-          .cast<Map<String, dynamic>>()
+      final codexList = response['codex'] as List<dynamic>? ?? [];
+      final codexDtos = codexList
+          .whereType<Map<String, dynamic>>()
           .map((json) => CodexEntryDto.fromJson(json))
           .toList();
 
@@ -116,12 +119,13 @@ class CharacterRepositoryImpl implements CharacterRepository {
   @override
   Future<List<Faction>> fetchFactions(String runId) async {
     try {
-      final response = await _httpClient.get<List<dynamic>>(
+      final response = await _httpClient.get<Map<String, dynamic>>(
         '${NetworkConfig.characterEndpoint}/$runId/factions',
       );
 
-      final factionDtos = (response as List)
-          .cast<Map<String, dynamic>>()
+      final factionList = response['factions'] as List<dynamic>? ?? [];
+      final factionDtos = factionList
+          .whereType<Map<String, dynamic>>()
           .map((json) => FactionDto.fromJson(json))
           .toList();
 
@@ -140,12 +144,13 @@ class CharacterRepositoryImpl implements CharacterRepository {
   @override
   Future<List<Relationship>> fetchRelationships(String runId) async {
     try {
-      final response = await _httpClient.get<List<dynamic>>(
+      final response = await _httpClient.get<Map<String, dynamic>>(
         '${NetworkConfig.characterEndpoint}/$runId/relationships',
       );
 
-      final relationshipDtos = (response as List)
-          .cast<Map<String, dynamic>>()
+      final relationshipList = response['relationships'] as List<dynamic>? ?? [];
+      final relationshipDtos = relationshipList
+          .whereType<Map<String, dynamic>>()
           .map((json) => RelationshipDto.fromJson(json))
           .toList();
 

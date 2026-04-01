@@ -1,7 +1,6 @@
 import '../../domain/models/game_models.dart';
 import '../dto/turn_dto.dart';
-import 'character_mapper.dart';
-import 'mapper_utils.dart';
+import '../dto/common_dto.dart';
 
 /// Mapper for turn-related DTOs to domain models
 

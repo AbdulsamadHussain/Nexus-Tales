@@ -1,7 +1,11 @@
 /// Network configuration and constants
 class NetworkConfig {
-  // Base URL - should be configurable per environment
-  static const String baseUrl = 'http://localhost:3000/api';
+  // Base URL configuration
+  // HTTPS is REQUIRED for all environments (no HTTP allowed)
+  // Override via HttpClientService constructor for environment-specific URLs:
+  //   - Development: 'https://localhost:3000/api' (allow self-signed certs temporarily)
+  //   - Production: 'https://api.nexus-tales.com/api' (certificate pinning should be enabled)
+  static const String baseUrl = 'https://localhost:3000/api';
 
   // Timeout durations
   static const Duration defaultTimeout = Duration(seconds: 30);
@@ -33,4 +37,17 @@ class NetworkConfig {
   static const String errorCodeSafeReject = 'SAFE_REJECT';
   static const String errorCodeIdempotencyConflict =
       'IDEMPOTENCY_CONFLICT';
+
+  // ============ INPUT VALIDATION LIMITS ============
+  // Maximum length for action text (player input)
+  static const int maxActionTextLength = 500;
+  // Maximum length for clarification answers
+  static const int maxClarificationAnswerLength = 200;
+  // Minimum length for meaningful actions
+  static const int minActionTextLength = 1;
+
+  // ============ RATE LIMITING GUIDANCE ============
+  // Backend enforces these limits; client validates for UX feedback
+  static const int maxTurnsPerMinute = 4;
+  static const int maxManualSavesPerRun = 20;
 }

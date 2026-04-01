@@ -1,5 +1,3 @@
-import 'package:uuid/uuid.dart';
-
 import '../dto/turn_dto.dart';
 import '../mappers/turn_mapper.dart';
 import '../services/http_client_service.dart';
@@ -34,7 +32,7 @@ class TurnRepositoryImpl implements TurnRepository {
               responseDto.clarificationPrompt ?? 'Please clarify your action',
           clientTurnIdForRetry: request.clientTurnId,
           clarificationContext: responseDto.clarificationContext ?? {},
-          message: responseDto.errorMessage,
+          message: responseDto.errorMessage ?? 'Clarification required',
         );
       }
 

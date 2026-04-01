@@ -1,5 +1,3 @@
-/// Mapper utilities for handling null-safe conversions
-
 /// Safe list converter that returns empty list if input is null
 List<T> mapList<T>(List<dynamic>? list, T Function(Map<String, dynamic>) mapper) {
   if (list == null || list.isEmpty) return [];

@@ -4,7 +4,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../app/routing/riverpod_providers.dart';
 import '../../app/theme/theme.dart';
 import '../../data/mock/mock_data.dart';
-import '../../shared/widgets/index.dart';
 
 class InventoryScreen extends ConsumerWidget {
   const InventoryScreen({super.key});

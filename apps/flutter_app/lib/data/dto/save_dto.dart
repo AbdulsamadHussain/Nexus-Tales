@@ -1,5 +1,4 @@
 import 'package:json_annotation/json_annotation.dart';
-import 'common_dto.dart';
 
 part 'save_dto.g.dart';
 

@@ -1,6 +1,5 @@
 import '../../domain/models/game_models.dart';
 import '../dto/character_state_dto.dart';
-import 'mapper_utils.dart';
 
 /// Mapper for character-related DTOs to domain models
 

@@ -1,5 +1,4 @@
 import '../dto/rollback_dto.dart';
-import '../../domain/models/game_models.dart';
 
 /// Repository interface for rollback operations
 abstract class RollbackRepository {

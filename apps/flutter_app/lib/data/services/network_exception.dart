@@ -1,5 +1,5 @@
-/// Custom exceptions for network operations
-/// Provides deterministic error classification and recovery hints
+// Custom exceptions for network operations
+// Provides deterministic error classification and recovery hints
 
 abstract class NetworkException implements Exception {
   final String message;
@@ -25,14 +25,10 @@ abstract class NetworkException implements Exception {
 /// Network connectivity lost or no internet
 class NoInternetException extends NetworkException {
   NoInternetException({
-    String message = 'No internet connection',
-    dynamic originalError,
-    StackTrace? stackTrace,
-  }) : super(
-    message: message,
-    originalError: originalError,
-    stackTrace: stackTrace,
-  );
+    super.message = 'No internet connection',
+    super.originalError,
+    super.stackTrace,
+  });
 
   @override
   bool get isRetryable => true;
@@ -47,14 +43,10 @@ class TimeoutException extends NetworkException {
 
   TimeoutException({
     required this.timeout,
-    String message = 'Request timeout',
-    dynamic originalError,
-    StackTrace? stackTrace,
-  }) : super(
-    message: message,
-    originalError: originalError,
-    stackTrace: stackTrace,
-  );
+    super.message = 'Request timeout',
+    super.originalError,
+    super.stackTrace,
+  });
 
   @override
   bool get isRetryable => true;
@@ -71,15 +63,11 @@ class HttpException extends NetworkException {
 
   HttpException({
     required this.statusCode,
-    required String message,
+    required super.message,
     this.responseBody,
-    dynamic originalError,
-    StackTrace? stackTrace,
-  }) : super(
-    message: message,
-    originalError: originalError,
-    stackTrace: stackTrace,
-  );
+    super.originalError,
+    super.stackTrace,
+  });
 
   @override
   bool get isRetryable => statusCode >= 500; // 5xx errors are retryable
@@ -104,16 +92,12 @@ class SafeRejectException extends NetworkException {
 
   SafeRejectException({
     required this.errorCode,
-    required String message,
+    required super.message,
     this.context = const {},
     this.retryAllowed = false,
-    dynamic originalError,
-    StackTrace? stackTrace,
-  }) : super(
-    message: message,
-    originalError: originalError,
-    stackTrace: stackTrace,
-  );
+    super.originalError,
+    super.stackTrace,
+  });
 
   @override
   bool get isRetryable => false;
@@ -132,14 +116,10 @@ class ClarificationRequiredException extends NetworkException {
     required this.prompt,
     required this.clientTurnIdForRetry,
     this.clarificationContext = const {},
-    String message = 'Clarification required',
-    dynamic originalError,
-    StackTrace? stackTrace,
-  }) : super(
-    message: message,
-    originalError: originalError,
-    stackTrace: stackTrace,
-  );
+    super.message = 'Clarification required',
+    super.originalError,
+    super.stackTrace,
+  });
 
   @override
   bool get isRetryable => false;
@@ -158,14 +138,10 @@ class IdempotencyConflictException extends NetworkException {
     required this.clientTurnId,
     required this.originalRequestHash,
     required this.incomingRequestHash,
-    String message = 'Idempotency conflict detected',
-    dynamic originalError,
-    StackTrace? stackTrace,
-  }) : super(
-    message: message,
-    originalError: originalError,
-    stackTrace: stackTrace,
-  );
+    super.message = 'Idempotency conflict detected',
+    super.originalError,
+    super.stackTrace,
+  });
 
   @override
   bool get isRetryable => false;
@@ -180,15 +156,11 @@ class DeserializationException extends NetworkException {
   final String jsonPath; // e.g., "response.character_state.inventory"
 
   DeserializationException({
-    required String message,
+    required super.message,
     required this.jsonPath,
-    dynamic originalError,
-    StackTrace? stackTrace,
-  }) : super(
-    message: message,
-    originalError: originalError,
-    stackTrace: stackTrace,
-  );
+    super.originalError,
+    super.stackTrace,
+  });
 
   @override
   bool get isRetryable => false;
@@ -201,14 +173,10 @@ class DeserializationException extends NetworkException {
 /// Unknown/unhandled error
 class UnknownNetworkException extends NetworkException {
   UnknownNetworkException({
-    String message = 'An unknown error occurred',
-    dynamic originalError,
-    StackTrace? stackTrace,
-  }) : super(
-    message: message,
-    originalError: originalError,
-    stackTrace: stackTrace,
-  );
+    super.message = 'An unknown error occurred',
+    super.originalError,
+    super.stackTrace,
+  });
 
   @override
   bool get isRetryable => false;
