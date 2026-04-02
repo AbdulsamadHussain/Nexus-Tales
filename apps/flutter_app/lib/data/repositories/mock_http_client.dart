@@ -97,6 +97,31 @@ class MockHttpClientService implements HttpClientServiceInterface {
 
   /// Mock turn submission response
   dynamic _mockTurnResponse(dynamic data) {
+    // Check if action requires clarification (for testing)
+    final requestData = data as Map<String, dynamic>?;
+    final action = requestData?['action']?.toString().toLowerCase() ?? '';
+    
+    // Trigger clarification for ambiguous actions
+    if (action.contains('attack') || action.contains('hit') || action.contains('shoot')) {
+      return {
+        'status': 'CLARIFICATION_REQUIRED',
+        'clarification_prompt': 'Which target do you want to attack?',
+        'clarification_context': {
+          'available_targets': ['hooded figure', 'bartender', 'drunk patron'],
+        },
+      };
+    }
+    
+    // Trigger safe reject for impossible actions
+    if (action.contains('teleport') || action.contains('fly away')) {
+      return {
+        'status': 'SAFE_REJECT',
+        'error_message': 'You cannot perform that action in this location.',
+        'error_code': 'LOCATION_RESTRICTION',
+      };
+    }
+    
+    // Normal successful turn
     return {
       'status': 'ACCEPTED',
       'revision_id': 'rev-mock-001',
