@@ -9,6 +9,7 @@ import '../../data/mock/mock_data.dart';
 import '../../data/services/network_exception.dart';
 import '../../domain/models/game_models.dart';
 import '../../shared/widgets/index.dart';
+import 'clarification/clarification_modal.dart';
 
 class PlayScreen extends ConsumerStatefulWidget {
   const PlayScreen({super.key});
@@ -340,12 +341,58 @@ class _PlayScreenState extends ConsumerState<PlayScreen> {
                 // Clear any previous errors
                 ref.read(lastErrorProvider.notifier).state = null;
               } on ClarificationRequiredException catch (e) {
-                // TODO: Show clarification modal
-                ref.read(lastErrorProvider.notifier).state = 
-                  'Clarification needed: ${e.prompt}';
+                // Show clarification modal
                 if (context.mounted) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(content: Text('Clarification needed: ${e.prompt}')),
+                  showDialog(
+                    context: context,
+                    barrierDismissible: false,
+                    builder: (ctx) => ClarificationModal(
+                      prompt: e.prompt,
+                      context: e.clarificationContext ?? {},
+                      previousClientTurnId: e.clientTurnIdForRetry,
+                      onSubmit: (answer) async {
+                        // Resubmit turn with clarification answer
+                        try {
+                          final clarifiedResult = await ref.read(
+                            submitTurnProvider(
+                              action: '${ draftAction.text.trim()} - $answer',
+                              runId: 'run-001',
+                              saveSlotId: 'slot-001',
+                            ).future,
+                          );
+
+                          // Add narrative blocks
+                          setState(() {
+                            _narrativeBlocks.add({
+                              'title': 'You clarify',
+                              'content': answer,
+                              'source': 'action',
+                            });
+
+                            if (clarifiedResult.canonicalEvents.isNotEmpty) {
+                              for (final event in clarifiedResult.canonicalEvents) {
+                                _narrativeBlocks.add({
+                                  'title': 'The world responds',
+                                  'content': event,
+                                  'source': 'narration',
+                                });
+                              }
+                            }
+                          });
+
+                          _actionInputController.clear();
+                          ref.read(draftActionProvider.notifier).state =
+                              const DraftAction(
+                                text: '',
+                                quickActionType: null,
+                                hasClarificationPending: false,
+                              );
+                        } on ClarificationRequiredException {
+                          // Still ambiguous - cascade handled by modal
+                          rethrow;
+                        }
+                      },
+                    ),
                   );
                 }
               } on IdempotencyConflictException {
@@ -359,15 +406,52 @@ class _PlayScreenState extends ConsumerState<PlayScreen> {
               } on SafeRejectException catch (e) {
                 ref.read(lastErrorProvider.notifier).state = e.message;
                 if (context.mounted) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(content: Text('Action rejected: ${e.message}')),
+                  showDialog(
+                    context: context,
+                    builder: (ctx) => AlertDialog(
+                      backgroundColor: AppColors.surfaceCard,
+                      title: const Text('Action Cannot Proceed'),
+                      content: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            e.message,
+                            style: AppTypography.bodyMedium,
+                          ),
+                          const SizedBox(height: AppSpacing.md),
+                          Text(
+                            'Try a different action.',
+                            style: AppTypography.bodySmall.copyWith(
+                              color: AppColors.textSecondary,
+                            ),
+                          ),
+                        ],
+                      ),
+                      actions: [
+                        TextButton(
+                          onPressed: () => Navigator.of(ctx).pop(),
+                          child: const Text('Understood'),
+                        ),
+                      ],
+                    ),
                   );
                 }
               } on NetworkException catch (e) {
                 ref.read(lastErrorProvider.notifier).state = e.message;
                 if (context.mounted) {
                   ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(content: Text('Network error: ${e.message}')),
+                    SnackBar(
+                      content: Text('Connection lost: ${e.message}'),
+                      action: SnackBarAction(
+                        label: 'Retry',
+                        onPressed: () {
+                          // Re-enable the submit button
+                          // User can retry manually
+                        },
+                      ),
+                      duration: const Duration(seconds: 5),
+                    ),
                   );
                 }
               } catch (e) {

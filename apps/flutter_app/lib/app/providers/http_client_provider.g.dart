@@ -6,7 +6,7 @@ part of 'http_client_provider.dart';
 // RiverpodGenerator
 // **************************************************************************
 
-String _$httpClientHash() => r'53a575d36ea1cb1a4381b91cff755862304656ab';
+String _$httpClientHash() => r'1fca25a7cae563c049b74f4758712c460d4fce39';
 
 /// Provides HTTP client service (mock during Phase 2, real after backend ready)
 /// Mock client simulates API responses with realistic delays
