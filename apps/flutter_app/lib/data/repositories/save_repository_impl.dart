@@ -1,6 +1,6 @@
 import '../dto/save_dto.dart';
 import '../mappers/save_mapper.dart';
-import '../services/http_client_service.dart';
+import '../services/http_client_interface.dart';
 import '../services/network_config.dart';
 import '../services/network_exception.dart';
 import '../../domain/models/game_models.dart';
@@ -8,9 +8,9 @@ import 'save_repository.dart';
 
 /// Implementation of SaveRepository using HTTP client
 class SaveRepositoryImpl implements SaveRepository {
-  final HttpClientService _httpClient;
+  final HttpClientServiceInterface _httpClient;
 
-  SaveRepositoryImpl({required HttpClientService httpClient})
+  SaveRepositoryImpl({required HttpClientServiceInterface httpClient})
       : _httpClient = httpClient;
 
   @override

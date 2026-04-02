@@ -1,9 +1,10 @@
 import 'package:dio/dio.dart';
 import 'network_config.dart';
 import 'network_exception.dart';
+import 'http_client_interface.dart';
 
 /// HTTP client service with interceptors, error handling, and retry logic
-class HttpClientService {
+class HttpClientService implements HttpClientServiceInterface {
   late final Dio _dio;
 
   HttpClientService({String? baseUrl, String? authToken}) {
@@ -30,11 +31,13 @@ class HttpClientService {
   }
 
   /// Update auth token (e.g., after refresh)
+  @override
   void setAuthToken(String token) {
     _dio.options.headers['Authorization'] = 'Bearer $token';
   }
 
   /// POST request with automatic retry on transient errors
+  @override
   Future<T> post<T>(
     String path, {
     required dynamic data,
@@ -55,6 +58,7 @@ class HttpClientService {
   }
 
   /// GET request with automatic retry
+  @override
   Future<T> get<T>(
     String path, {
     Map<String, dynamic>? queryParameters,
@@ -72,6 +76,7 @@ class HttpClientService {
   }
 
   /// PUT request with automatic retry
+  @override
   Future<T> put<T>(
     String path, {
     required dynamic data,
@@ -92,6 +97,7 @@ class HttpClientService {
   }
 
   /// DELETE request with automatic retry
+  @override
   Future<T> delete<T>(
     String path, {
     Map<String, dynamic>? queryParameters,

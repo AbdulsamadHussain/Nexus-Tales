@@ -2,9 +2,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../app/providers/repository_providers.dart';
 import '../../app/routing/riverpod_providers.dart';
 import '../../app/theme/theme.dart';
 import '../../data/mock/mock_data.dart';
+import '../../data/services/network_exception.dart';
 import '../../domain/models/game_models.dart';
 import '../../shared/widgets/index.dart';
 
@@ -268,32 +270,116 @@ class _PlayScreenState extends ConsumerState<PlayScreen> {
               if (draftAction.text.trim().isEmpty) return;
 
               ref.read(isSubmittingTurnProvider.notifier).state = true;
+              final context = this.context;
 
-              await Future.delayed(const Duration(milliseconds: 800));
+              try {
+                // Submit turn to backend API
+                final result = await ref.read(
+                  submitTurnProvider(
+                    action: draftAction.text.trim(),
+                    runId: 'run-001', // TODO: Get from session/auth
+                    saveSlotId: 'slot-001', // TODO: Get from session/auth
+                  ).future,
+                );
 
-              setState(() {
-                _narrativeBlocks.add({
-                  'title': 'You act',
-                  'content': 'You ${draftAction.text.toLowerCase()}.',
-                  'source': 'action',
+                // Update character state from result.stateDelta
+                final currentChar = ref.read(currentCharacterProvider);
+                if (currentChar != null && result.stateDelta.isNotEmpty) {
+                  // Apply delta to current character
+                  // TODO: Parse stateDelta and apply updates to character
+                  // For now, just get current state
+                  ref.read(currentCharacterProvider.notifier).state = currentChar;
+                }
+
+                // Add narrative blocks from canonical events
+                setState(() {
+                  _narrativeBlocks.add({
+                    'title': 'You act',
+                    'content': 'You ${draftAction.text.toLowerCase()}.',
+                    'source': 'action',
+                  });
+                  
+                  // Add canonical events from result
+                  if (result.canonicalEvents.isNotEmpty) {
+                    for (final event in result.canonicalEvents) {
+                      _narrativeBlocks.add({
+                        'title': 'The world responds',
+                        'content': event,
+                        'source': 'narration',
+                      });
+                    }
+                  } else if (result.narrativeBlocks.isNotEmpty) {
+                    // Fallback to narrative blocks
+                    for (final narrative in result.narrativeBlocks) {
+                      _narrativeBlocks.add({
+                        'title': 'The world responds',
+                        'content': narrative,
+                        'source': 'narration',
+                      });
+                    }
+                  } else {
+                    // Final fallback generic response
+                    _narrativeBlocks.add({
+                      'title': 'The world responds',
+                      'content': result.actionSummary.isNotEmpty 
+                        ? result.actionSummary
+                        : 'The scene shifts. Something has changed. The hooded figure\'s hand trembles slightly on their goblet.',
+                      'source': 'narration',
+                    });
+                  }
                 });
-                _narrativeBlocks.add({
-                  'title': 'The world responds',
-                  'content':
-                      'The scene shifts. Something has changed. The hooded figure\'s hand trembles slightly on their goblet.',
-                  'source': 'narration',
-                });
-              });
 
-              _actionInputController.clear();
+                _actionInputController.clear();
 
-              ref.read(draftActionProvider.notifier).state = const DraftAction(
-                    text: '',
-                    quickActionType: null,
-                    hasClarificationPending: false,
+                ref.read(draftActionProvider.notifier).state = const DraftAction(
+                  text: '',
+                  quickActionType: null,
+                  hasClarificationPending: false,
+                );
+
+                // Clear any previous errors
+                ref.read(lastErrorProvider.notifier).state = null;
+              } on ClarificationRequiredException catch (e) {
+                // TODO: Show clarification modal
+                ref.read(lastErrorProvider.notifier).state = 
+                  'Clarification needed: ${e.prompt}';
+                if (context.mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text('Clarification needed: ${e.prompt}')),
                   );
-
-              ref.read(isSubmittingTurnProvider.notifier).state = false;
+                }
+              } on IdempotencyConflictException {
+                ref.read(lastErrorProvider.notifier).state = 
+                  'Action conflict. Please try again.';
+                if (context.mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('Action conflict detected. Please try again.')),
+                  );
+                }
+              } on SafeRejectException catch (e) {
+                ref.read(lastErrorProvider.notifier).state = e.message;
+                if (context.mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text('Action rejected: ${e.message}')),
+                  );
+                }
+              } on NetworkException catch (e) {
+                ref.read(lastErrorProvider.notifier).state = e.message;
+                if (context.mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text('Network error: ${e.message}')),
+                  );
+                }
+              } catch (e) {
+                ref.read(lastErrorProvider.notifier).state = 'Unexpected error: $e';
+                if (context.mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text('Unexpected error: $e')),
+                  );
+                }
+              } finally {
+                ref.read(isSubmittingTurnProvider.notifier).state = false;
+              }
             },
           ),
         ],

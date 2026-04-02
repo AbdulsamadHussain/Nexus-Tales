@@ -1,14 +1,14 @@
 import '../dto/rollback_dto.dart';
-import '../services/http_client_service.dart';
+import '../services/http_client_interface.dart';
 import '../services/network_config.dart';
 import '../services/network_exception.dart';
 import 'rollback_repository.dart';
 
 /// Implementation of RollbackRepository using HTTP client
 class RollbackRepositoryImpl implements RollbackRepository {
-  final HttpClientService _httpClient;
+  final HttpClientServiceInterface _httpClient;
 
-  RollbackRepositoryImpl({required HttpClientService httpClient})
+  RollbackRepositoryImpl({required HttpClientServiceInterface httpClient})
       : _httpClient = httpClient;
 
   @override

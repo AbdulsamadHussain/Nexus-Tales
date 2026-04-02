@@ -1317,4 +1317,3 @@ Per PLAN.md: *"A player can complete the full loop from input to authoritative r
 7. **Week 6**:
    - Performance profiling
    - Release readiness verification
-

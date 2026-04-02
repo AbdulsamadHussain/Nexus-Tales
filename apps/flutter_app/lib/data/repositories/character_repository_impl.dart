@@ -1,6 +1,6 @@
 import '../dto/character_state_dto.dart';
 import '../mappers/character_mapper.dart';
-import '../services/http_client_service.dart';
+import '../services/http_client_interface.dart';
 import '../services/network_config.dart';
 import '../services/network_exception.dart';
 import '../../domain/models/game_models.dart';
@@ -8,9 +8,9 @@ import 'character_repository.dart';
 
 /// Implementation of CharacterRepository using HTTP client
 class CharacterRepositoryImpl implements CharacterRepository {
-  final HttpClientService _httpClient;
+  final HttpClientServiceInterface _httpClient;
 
-  CharacterRepositoryImpl({required HttpClientService httpClient})
+  CharacterRepositoryImpl({required HttpClientServiceInterface httpClient})
       : _httpClient = httpClient;
 
   @override

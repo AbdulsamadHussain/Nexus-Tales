@@ -1,6 +1,6 @@
 import '../dto/turn_dto.dart';
 import '../mappers/turn_mapper.dart';
-import '../services/http_client_service.dart';
+import '../services/http_client_interface.dart';
 import '../services/network_config.dart';
 import '../services/network_exception.dart';
 import '../../domain/models/game_models.dart';
@@ -8,9 +8,9 @@ import 'turn_repository.dart';
 
 /// Implementation of TurnRepository using HTTP client
 class TurnRepositoryImpl implements TurnRepository {
-  final HttpClientService _httpClient;
+  final HttpClientServiceInterface _httpClient;
 
-  TurnRepositoryImpl({required HttpClientService httpClient})
+  TurnRepositoryImpl({required HttpClientServiceInterface httpClient})
       : _httpClient = httpClient;
 
   @override
