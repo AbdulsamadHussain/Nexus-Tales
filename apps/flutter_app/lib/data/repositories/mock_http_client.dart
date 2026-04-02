@@ -101,8 +101,12 @@ class MockHttpClientService implements HttpClientServiceInterface {
     final requestData = data as Map<String, dynamic>?;
     final action = requestData?['action']?.toString().toLowerCase() ?? '';
     
-    // Trigger clarification for ambiguous actions
-    if (action.contains('attack') || action.contains('hit') || action.contains('shoot')) {
+    // Skip keyword checks if action has already been clarified (contains ' - ')
+    final isAlreadyClarified = action.contains(' - ');
+    
+    // Trigger clarification for ambiguous actions (only if not already clarified)
+    if (!isAlreadyClarified && 
+        (action.contains('attack') || action.contains('hit') || action.contains('shoot'))) {
       return {
         'status': 'CLARIFICATION_REQUIRED',
         'clarification_prompt': 'Which target do you want to attack?',
@@ -112,8 +116,9 @@ class MockHttpClientService implements HttpClientServiceInterface {
       };
     }
     
-    // Trigger safe reject for impossible actions
-    if (action.contains('teleport') || action.contains('fly away')) {
+    // Trigger safe reject for impossible actions (only if not already clarified)
+    if (!isAlreadyClarified && 
+        (action.contains('teleport') || action.contains('fly away'))) {
       return {
         'status': 'SAFE_REJECT',
         'error_message': 'You cannot perform that action in this location.',
