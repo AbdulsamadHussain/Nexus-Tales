@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:http/http.dart' as http;
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'character_sheet_panel.dart';
 
 class GameScreen extends ConsumerStatefulWidget {
   const GameScreen({super.key});
@@ -10,6 +11,8 @@ class GameScreen extends ConsumerStatefulWidget {
   @override
   ConsumerState<GameScreen> createState() => _GameScreenState();
 }
+
+bool _showCharacterSheet = false;
 
 class _GameScreenState extends ConsumerState<GameScreen> {
   final _controller = TextEditingController();
@@ -214,93 +217,108 @@ class _GameScreenState extends ConsumerState<GameScreen> {
     }
   }
 
-  @override
+@override
   Widget build(BuildContext context) {
-    final user = Supabase.instance.client.auth.currentUser;
-    final charName = _canonicalState?['character_name'] ?? '...';
-    final charClass = _canonicalState?['character_class'] ?? '';
-    final hp = _canonicalState?['hp'] ?? 0;
-    final hpMax = _canonicalState?['hp_max'] ?? 40;
-    final mp = _canonicalState?['mp'] ?? 0;
-    final mpMax = _canonicalState?['mp_max'] ?? 20;
-    final stamina = _canonicalState?['stamina'] ?? 0;
-    final staminaMax = _canonicalState?['stamina_max'] ?? 20;
+  final charName = _canonicalState?['character_name'] ?? '...';
+  final charClass = _canonicalState?['character_class'] ?? '';
+  final hp = _canonicalState?['hp'] ?? 0;
+  final hpMax = _canonicalState?['hp_max'] ?? 40;
+  final mp = _canonicalState?['mp'] ?? 0;
+  final mpMax = _canonicalState?['mp_max'] ?? 20;
+  final stamina = _canonicalState?['stamina'] ?? 0;
+  final staminaMax = _canonicalState?['stamina_max'] ?? 20;
 
-    return Scaffold(
-      appBar: AppBar(
-        backgroundColor: const Color(0xFF0F1219),
-        title: const Text(
-          'NEXUS-TALE',
-          style: TextStyle(
-            letterSpacing: 4,
-            color: Color(0xFFC9A84C),
-            fontSize: 16,
+  return Scaffold(
+    appBar: AppBar(
+      backgroundColor: const Color(0xFF0F1219),
+      title: const Text(
+        'NEXUS-TALE',
+        style: TextStyle(
+          letterSpacing: 4,
+          color: Color(0xFFC9A84C),
+          fontSize: 16,
+        ),
+      ),
+      actions: [
+        Padding(
+          padding: const EdgeInsets.only(right: 16),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              Text(
+                charName,
+                style: const TextStyle(
+                  color: Color(0xFFC9A84C),
+                  fontSize: 12,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+              Text(
+                charClass,
+                style: const TextStyle(
+                  color: Color(0xFF4A5A72),
+                  fontSize: 10,
+                ),
+              ),
+            ],
           ),
         ),
-        actions: [
-          Padding(
-            padding: const EdgeInsets.only(right: 16),
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              crossAxisAlignment: CrossAxisAlignment.end,
-              children: [
-                Text(
-                  charName,
-                  style: const TextStyle(
-                    color: Color(0xFFC9A84C),
-                    fontSize: 12,
-                    fontWeight: FontWeight.w500,
-                  ),
+        Padding(
+          padding: const EdgeInsets.only(right: 16),
+          child: Row(
+            children: [
+              _statChip('HP', hp, hpMax, const Color(0xFFE05555)),
+              const SizedBox(width: 6),
+              _statChip('MP', mp, mpMax, const Color(0xFF4A9EFF)),
+              const SizedBox(width: 6),
+              _statChip('ST', stamina, staminaMax, const Color(0xFF4CAF82)),
+            ],
+          ),
+        ),
+        IconButton(
+          icon: Icon(
+                Icons.person,
+                color: _showCharacterSheet ? const Color(0xFF4A9EFF) : const Color(0xFF4A5A72),
+                size: 18,
+            ),
+            onPressed: () => setState(() => _showCharacterSheet = !_showCharacterSheet),
+        ),
+        IconButton(
+          icon: const Icon(Icons.logout, color: Color(0xFF4A5A72), size: 18),
+          onPressed: () async {
+            await Supabase.instance.client.auth.signOut();
+            if (mounted) Navigator.of(context).pushReplacementNamed('/');
+          },
+        ),
+      ],
+    ),
+    body: Row(
+      children: [
+        Expanded(
+          child: Column(
+            children: [
+              Expanded(
+                child: ListView.builder(
+                  controller: _scrollController,
+                  padding: const EdgeInsets.all(16),
+                  itemCount: _log.length,
+                  itemBuilder: (context, i) => _buildMessage(_log[i]),
                 ),
-                Text(
-                  charClass,
-                  style: const TextStyle(
-                    color: Color(0xFF4A5A72),
-                    fontSize: 10,
-                  ),
-                ),
-              ],
-            ),
+              ),
+              _buildInputBar(),
+            ],
           ),
-          // Stats row
-          Padding(
-            padding: const EdgeInsets.only(right: 16),
-            child: Row(
-              children: [
-                _statChip('HP', hp, hpMax, const Color(0xFFE05555)),
-                const SizedBox(width: 6),
-                _statChip('MP', mp, mpMax, const Color(0xFF4A9EFF)),
-                const SizedBox(width: 6),
-                _statChip('ST', stamina, staminaMax, const Color(0xFF4CAF82)),
-              ],
-            ),
+        ),
+        if (_showCharacterSheet && _canonicalState != null)
+          CharacterSheetPanel(
+            canonicalState: _canonicalState!,
+            onClose: () => setState(() => _showCharacterSheet = false),
           ),
-          IconButton(
-            icon: const Icon(Icons.logout, color: Color(0xFF4A5A72), size: 18),
-            onPressed: () async {
-              await Supabase.instance.client.auth.signOut();
-              if (mounted) {
-                Navigator.of(context).pushReplacementNamed('/');
-              }
-            },
-          ),
-        ],
-      ),
-      body: Column(
-        children: [
-          Expanded(
-            child: ListView.builder(
-              controller: _scrollController,
-              padding: const EdgeInsets.all(16),
-              itemCount: _log.length,
-              itemBuilder: (context, i) => _buildMessage(_log[i]),
-            ),
-          ),
-          _buildInputBar(),
-        ],
-      ),
-    );
-  }
+      ],
+    ),
+  );
+}
 
   Widget _statChip(String label, int current, int max, Color color) {
     return Container(
