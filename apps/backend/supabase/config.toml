@@ -1,0 +1,11 @@
+[functions.create_character]
+verify_jwt = false
+
+[functions.turn_orchestrator]
+verify_jwt = false
+
+[functions.simulation_service]
+verify_jwt = false
+
+[functions.narration_worker]
+verify_jwt = false

@@ -1,0 +1,45 @@
+name: nexus_tale
+description: "Nexus-Tale — AI narrative RPG"
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.11.3
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # Supabase — auth, database, realtime, edge functions
+  supabase_flutter: ^2.8.0
+
+  # State management
+  flutter_riverpod: ^2.6.1
+  riverpod_annotation: ^2.6.1
+
+  # Environment variables
+  flutter_dotenv: ^5.2.1
+
+  # HTTP streaming (for narration SSE)
+  http: ^1.2.2
+
+  # Local storage for session state
+  shared_preferences: ^2.3.3
+
+  # UI utilities
+  cupertino_icons: ^1.0.8
+  google_fonts: ^6.2.1
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+  build_runner: ^2.4.13
+  riverpod_generator: ^2.6.1
+  custom_lint: ^0.7.5
+  riverpod_lint: ^2.6.1
+
+flutter:
+  uses-material-design: true
+  assets:
+    - .env
