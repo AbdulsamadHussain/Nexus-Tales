@@ -1,9 +1,0 @@
-node_modules/
-dist/
-coverage/
-.env
-.dart_tool/
-build/
-.idea/
-.vscode/
-*.tsbuildinfo
