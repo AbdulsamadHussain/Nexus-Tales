@@ -95,13 +95,24 @@ class _GameScreenState extends ConsumerState<GameScreen> {
 
       final data = response.data as Map<String, dynamic>;
 
-      if (data['status'] == 'REJECTED') {
-        setState(() {
-          _log.add({'type': 'system', 'text': '${data['player_message']}'});
-        });
-        _scrollToBottom();
+      if (data['status'] == 'CLARIFICATION_REQUIRED') {
+        // Try parser assist locally before giving up
+        final parsed = await _runParserAssist(action);
+        if (parsed != null) {
+          // Resubmit with resolved route
+          await _submitWithRoute(action, parsed['route']!, user.id);
+        } else {
+          setState(() {
+            _log.add({
+              'type': 'clarification',
+              'text': 'What do you do? Describe your action — attack, search, move, speak, or use an item.',
+            });
+          });
+          _scrollToBottom();
+        }
         return;
       }
+
 
       _lastRevisionId = data['revision_id'] as String?;
 
@@ -422,6 +433,33 @@ class _GameScreenState extends ConsumerState<GameScreen> {
           ),
         );
 
+      case 'clarification':
+        return Container(
+          margin: const EdgeInsets.only(bottom: 12),
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: const Color(0xFF1A2230),
+            borderRadius: BorderRadius.circular(6),
+            border: Border.all(color: const Color(0xFF8A6D2E)),
+          ),
+          child: Row(
+            children: [
+              const Icon(Icons.help_outline, color: Color(0xFFC9A84C), size: 16),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  msg['text'] as String,
+                  style: const TextStyle(
+                    color: Color(0xFFC9A84C),
+                    fontSize: 13,
+                    fontStyle: FontStyle.italic,
+                  ),
+                ),
+              ),
+            ],
+          ),
+      );
+
       default:
         return Container(
           margin: const EdgeInsets.only(bottom: 8),
@@ -465,4 +503,150 @@ class _GameScreenState extends ConsumerState<GameScreen> {
       ),
     );
   }
+
+Future<Map<String, String>?> _runParserAssist(String input) async {
+  try {
+    final prompt = '''You are a game action classifier for a dark fantasy RPG.
+Classify the player input and respond with ONLY a JSON object. No explanation.
+
+Player input: "$input"
+
+You MUST respond with exactly this structure:
+{"route": "NO_ROLL_DETERMINISTIC", "action_type": "SPEAK"}
+
+The "route" field MUST be one of these exact strings only:
+- "NO_ROLL_DETERMINISTIC" (for speaking, examining, moving, using items)
+- "ROLL_REQUIRED" (for attacking, sneaking, lockpicking, skill checks)
+- "SAFE_REJECT" (for harmful real-world requests)
+
+The "action_type" field MUST be one of:
+- "SPEAK" "EXAMINE" "MOVE" "USE_ITEM" "ATTACK" "STEALTH" "SKILL_CHECK" "OTHER"
+
+Examples:
+Input: "I say hello to the guard" → {"route": "NO_ROLL_DETERMINISTIC", "action_type": "SPEAK"}
+Input: "my blade finds the gap" → {"route": "ROLL_REQUIRED", "action_type": "ATTACK"}
+Input: "I can carry the truth is what I say to the warden" → {"route": "NO_ROLL_DETERMINISTIC", "action_type": "SPEAK"}
+Input: "the cabinet I need what is inside" → {"route": "ROLL_REQUIRED", "action_type": "SKILL_CHECK"}''';
+
+    final uri = Uri.parse('http://localhost:11434/api/generate');
+    final response = await http
+        .post(
+          uri,
+          headers: {'Content-Type': 'application/json'},
+          body: jsonEncode({
+            'model': 'gemma4:e2b',
+            'prompt': prompt,
+            'stream': false,
+            'think': false,
+            'options': {'temperature': 0.1, 'num_predict': 60},
+          }),
+        )
+        .timeout(const Duration(seconds: 15));
+
+    if (response.statusCode != 200) return null;
+
+    final body = jsonDecode(response.body) as Map<String, dynamic>;
+    final raw = body['response'] as String? ?? '';
+
+    debugPrint('=== PARSER RAW ===');
+    debugPrint(raw);
+    debugPrint('=== END ===');
+
+    final jsonMatch = RegExp(r'\{[\s\S]*\}').firstMatch(raw);
+    if (jsonMatch == null) return null;
+
+    final parsed = jsonDecode(jsonMatch.group(0)!) as Map<String, dynamic>;
+
+    final validRoutes = ['ROLL_REQUIRED', 'NO_ROLL_DETERMINISTIC', 'SAFE_REJECT'];
+    final route = parsed['route'] as String?;
+    if (route == null || !validRoutes.contains(route)) return null;
+    if (route == 'SAFE_REJECT') return null;
+
+    debugPrint('=== PARSER ASSIST ===');
+    debugPrint('Input: $input → route: $route, action: ${parsed['action_type']}');
+    debugPrint('=== END ===');
+
+    return {
+      'route': route,
+      'action_type': parsed['action_type'] as String? ?? 'OTHER',
+    };
+  } catch (e) {
+    debugPrint('Parser assist error: $e');
+    return null;
+  }
+}
+
+Future<void> _submitWithRoute(
+  String action,
+  String resolvedRoute,
+  String userId,
+) async {
+  try {
+    final response = await Supabase.instance.client.functions.invoke(
+      'turn_orchestrator',
+      body: {
+        'user_id': userId,
+        'player_action': action,
+        'previous_revision_id': _lastRevisionId,
+        'resolved_route': resolvedRoute,
+        'content_settings': {
+          'violence': true,
+          'horror': true,
+          'romance': false,
+          'mature': false,
+        },
+      },
+    );
+
+    final data = response.data as Map<String, dynamic>;
+    if (data['status'] == 'CLARIFICATION_REQUIRED') {
+      setState(() {
+        _log.add({
+          'type': 'clarification',
+          'text': 'What do you do? Describe your action clearly.',
+        });
+      });
+      _scrollToBottom();
+      return;
+    }
+
+    _lastRevisionId = data['revision_id'] as String?;
+    _loadCanonicalState();
+
+    if (data['roll'] != null) {
+      final roll = data['roll'] as Map<String, dynamic>;
+      setState(() {
+        _log.add({
+          'type': 'roll',
+          'die': roll['die'],
+          'modifier': roll['modifier'],
+          'total': roll['total'],
+          'dc': roll['dc'],
+          'tier': data['success_tier'],
+        });
+      });
+      _scrollToBottom();
+    }
+
+    final narration = await _callOllama(
+      data['narration_context'] as String? ?? '',
+      data['success_tier'] as String? ?? 'NO_ROLL',
+    );
+
+    setState(() {
+      _log.add({'type': 'narrator', 'text': narration});
+      _log.add({
+        'type': 'system',
+        'text': '${data['revision_id']} · ${data['success_tier']} · ${data['route_category']} · parser_assisted',
+      });
+    });
+    _scrollToBottom();
+  } catch (e) {
+    setState(() {
+      _log.add({'type': 'system', 'text': 'Error: $e'});
+    });
+    _scrollToBottom();
+  }
+}
+
 }

@@ -6,6 +6,8 @@ import 'features/auth/auth_screen.dart';
 import 'features/character/character_setup_screen.dart';
 import 'features/game/game_screen.dart';
 
+// test@nexustale.com test1234
+
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await dotenv.load(fileName: '.env');
