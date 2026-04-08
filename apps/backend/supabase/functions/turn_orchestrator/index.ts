@@ -184,6 +184,8 @@ serve(async (req: Request) => {
       gateway_decision: gateway.decision,
       route_category: routeCategory,
       autosave_candidate: simResult.autosave_candidate,
+      npc_states: simResult.npc_states,
+      npcs_in_scene: simResult.npcs_in_scene,
     });
 
   } catch (err) {

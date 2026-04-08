@@ -68,12 +68,20 @@ function rollD20(modifier: number, dc: number): RollResult {
 function computeDelta(
   action: string,
   roll: RollResult | null,
-): { delta: StateDelta; events: string[] } {
+  npcsInScene: Record<string, unknown>[],
+  npcStates: Record<string, unknown>,
+): { 
+  delta: StateDelta; 
+  events: string[];
+  npcStateUpdates: Record<string, unknown>;
+} {
   const lower = action.toLowerCase();
   const delta: StateDelta = {};
   const events: string[] = [];
+  const npcStateUpdates: Record<string, unknown> = {};
 
-  if (/attack|strike|stab|charge|backstab/.test(lower)) {
+  // Stamina costs
+  if (/attack|strike|stab|charge|backstab|slash|punch|kick/.test(lower)) {
     delta.stamina = -3;
     events.push("COMBAT_TURN_RESOLVED");
   } else if (/sneak|hide|shadow/.test(lower)) {
@@ -87,15 +95,63 @@ function computeDelta(
     events.push("SKILL_CHECK");
   }
 
+  // Roll outcomes
   if (roll) {
     if (roll.tier === "CRITICAL_SUCCESS") {
       delta.xp = 30;
+      if (/attack|strike|stab|slash|backstab/.test(lower)) {
+        // Deal damage to hostile NPC
+        const targetNpc = findTargetNpc(lower, npcsInScene);
+        if (targetNpc) {
+          const npcId = targetNpc.id as string;
+          const currentHp = getNpcHp(npcId, targetNpc, npcStates);
+          const damage = 15;
+          const newHp = Math.max(0, currentHp - damage);
+          npcStateUpdates[npcId] = {
+            ...(npcStates[npcId] as Record<string, unknown> ?? {}),
+            hp: newHp,
+            is_dead: newHp <= 0,
+          };
+          if (newHp <= 0) events.push("NPC_DEFEATED");
+          else events.push("ENEMY_CRITICAL_HIT");
+        }
+      }
     } else if (roll.tier === "FULL_SUCCESS") {
       delta.xp = 20;
+      if (/attack|strike|stab|slash/.test(lower)) {
+        const targetNpc = findTargetNpc(lower, npcsInScene);
+        if (targetNpc) {
+          const npcId = targetNpc.id as string;
+          const currentHp = getNpcHp(npcId, targetNpc, npcStates);
+          const damage = 9;
+          const newHp = Math.max(0, currentHp - damage);
+          npcStateUpdates[npcId] = {
+            ...(npcStates[npcId] as Record<string, unknown> ?? {}),
+            hp: newHp,
+            is_dead: newHp <= 0,
+          };
+          if (newHp <= 0) events.push("NPC_DEFEATED");
+        }
+      }
       if (/pick lock|search|examine/.test(lower)) events.push("QUEST_UPDATED");
     } else if (roll.tier === "PARTIAL_SUCCESS") {
       delta.hp = -4;
       delta.xp = 10;
+      if (/attack|strike|stab/.test(lower)) {
+        const targetNpc = findTargetNpc(lower, npcsInScene);
+        if (targetNpc) {
+          const npcId = targetNpc.id as string;
+          const currentHp = getNpcHp(npcId, targetNpc, npcStates);
+          const damage = 4;
+          const newHp = Math.max(0, currentHp - damage);
+          npcStateUpdates[npcId] = {
+            ...(npcStates[npcId] as Record<string, unknown> ?? {}),
+            hp: newHp,
+            is_dead: newHp <= 0,
+          };
+          if (newHp <= 0) events.push("NPC_DEFEATED");
+        }
+      }
     } else if (roll.tier === "FAILURE") {
       delta.hp = -5;
       delta.xp = 5;
@@ -106,7 +162,33 @@ function computeDelta(
     }
   }
 
-  return { delta, events };
+  return { delta, events, npcStateUpdates };
+}
+
+// Find which NPC the player is targeting based on action text
+function findTargetNpc(
+  action: string,
+  npcsInScene: Record<string, unknown>[],
+): Record<string, unknown> | null {
+  // First try to match by name
+  for (const npc of npcsInScene) {
+    const name = (npc.name as string).toLowerCase();
+    if (action.includes(name.split(' ')[0].toLowerCase())) return npc;
+  }
+  // Default to first hostile NPC
+  const hostile = npcsInScene.find((n) => n.is_hostile === true);
+  return hostile ?? null;
+}
+
+// Get current NPC HP from npc_states (tracks damage across turns)
+function getNpcHp(
+  npcId: string,
+  npc: Record<string, unknown>,
+  npcStates: Record<string, unknown>,
+): number {
+  const tracked = npcStates[npcId] as Record<string, unknown> | undefined;
+  if (tracked?.hp !== undefined) return tracked.hp as number;
+  return npc.hp_max as number ?? npc.hp as number ?? 20;
 }
 
 // ── CHECK STORY BEATS ─────────────────────────────────────────────
@@ -158,12 +240,46 @@ async function checkStoryBeats(
       );
       if (hasItem) triggered = true;
     }
-
     if (triggered) {
       fired.push(beat.id);
       const consequences = beat.consequences as Record<string, unknown>;
       if (consequences.narration_hint) {
         narrationHints.push(consequences.narration_hint as string);
+      }
+
+      // Grant items from loot
+      if (consequences.grant_items && Array.isArray(consequences.grant_items)) {
+        const items = consequences.grant_items as string[];
+        console.log("Granting items:", items);
+        
+        const { data: itemData, error: itemError } = await supabase
+          .from("items")
+          .select("id, name, description, rarity, item_type, effects")
+          .in("id", items);
+
+        console.log("Item data:", JSON.stringify(itemData));
+        console.log("Item error:", JSON.stringify(itemError));
+
+        if (itemData && itemData.length > 0) {
+          const { data: currentState, error: stateError } = await supabase
+            .from("canonical_state")
+            .select("inventory")
+            .eq("user_id", userId)
+            .single();
+
+          console.log("Current inventory:", JSON.stringify(currentState?.inventory));
+          console.log("State error:", JSON.stringify(stateError));
+
+          const currentInventory = (currentState?.inventory as unknown[]) ?? [];
+          const newInventory = [...currentInventory, ...itemData];
+
+          const { error: updateError } = await supabase
+            .from("canonical_state")
+            .update({ inventory: newInventory })
+            .eq("user_id", userId);
+
+          console.log("Inventory update error:", JSON.stringify(updateError));
+        }
       }
     }
   }
@@ -194,6 +310,7 @@ function buildNarrationContext(
   scene: Record<string, unknown> | null,
   npcsInScene: Record<string, unknown>[],
   narrationHints: string[],
+  npcStateUpdates: Record<string, unknown>,
 ): string {
   let ctx = `=== CANONICAL GAME STATE ===\n`;
   ctx += `Character: ${state.character_name} the ${state.character_class}\n`;
@@ -209,7 +326,12 @@ function buildNarrationContext(
   if (npcsInScene.length > 0) {
     ctx += `\n=== NPCS PRESENT ===\n`;
     for (const npc of npcsInScene) {
-      ctx += `${npc.name}: ${npc.description}. ${npc.personality}\n`;
+      const npcId = npc.id as string;
+      const trackedState = (npcStateUpdates as Record<string, unknown>)[npcId] as Record<string, unknown> | undefined;
+      const currentHp = trackedState?.hp ?? npc.hp_max ?? npc.hp;
+      const isDead = trackedState?.is_dead ?? false;
+      const status = isDead ? "DEFEATED" : `HP: ${currentHp}/${npc.hp_max}`;
+      ctx += `${npc.name} [${status}]: ${npc.description}. ${npc.personality}\n`;
     }
   }
 
@@ -334,8 +456,13 @@ serve(async (req: Request) => {
     }
 
     // ── 5. Compute consequences ───────────────────────────────────
-    const { delta, events } = computeDelta(player_action, roll);
-
+    const npcStates = (campaignState?.npc_states as Record<string, unknown>) ?? {};
+    const { delta, events, npcStateUpdates } = computeDelta(
+      player_action,
+      roll,
+      npcsInScene,
+      npcStates,
+    );
     // ── 6. Apply delta to canonical state ─────────────────────────
     const updatedState: Record<string, number> = {};
     if (delta.hp !== undefined) {
@@ -354,6 +481,19 @@ serve(async (req: Request) => {
       updatedState.gold = state.gold + delta.gold;
     }
 
+    // ── 6b. Save NPC state updates ────────────────────────────────
+    const mergedNpcStates = { ...npcStates, ...npcStateUpdates };
+    if (Object.keys(npcStateUpdates).length > 0) {
+      await supabase
+        .from("player_campaign_state")
+        .update({ 
+          npc_states: mergedNpcStates,
+          last_played_at: new Date().toISOString(),
+        })
+        .eq("user_id", user_id)
+        .eq("campaign_id", state.campaign_id);
+    }
+
     // ── 7. Write canonical state ──────────────────────────────────
     const { error: updateError } = await supabase
       .from("canonical_state")
@@ -369,7 +509,10 @@ serve(async (req: Request) => {
       state.campaign_id,
       events,
       { ...state, ...updatedState },
-      campaignState || {},
+      {
+        ...(campaignState || {}),
+        npc_states: mergedNpcStates,
+      },
     );
 
     if (beatsFired.length > 0) {
@@ -429,6 +572,7 @@ serve(async (req: Request) => {
       scene,
       npcsInScene,
       narrationHints,
+      npcStateUpdates,
     );
 
     return new Response(
@@ -441,13 +585,14 @@ serve(async (req: Request) => {
         autosave_candidate,
         summary_job_queued: false,
         narration_context,
+        npc_states: { ...npcStates, ...npcStateUpdates },
+        npcs_in_scene: npcsInScene.map((npc) => ({
+          id: npc.id,
+          name: npc.name,
+          hp_max: npc.hp_max,
+          is_hostile: npc.is_hostile,
+        })),
       }),
-      {
-        headers: {
-          "Content-Type": "application/json",
-          "Access-Control-Allow-Origin": "*",
-        },
-      }
     );
   } catch (err) {
     console.error("simulation_service error:", err);
