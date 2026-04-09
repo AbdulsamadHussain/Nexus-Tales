@@ -70,8 +70,9 @@ function computeDelta(
   roll: RollResult | null,
   npcsInScene: Record<string, unknown>[],
   npcStates: Record<string, unknown>,
-): { 
-  delta: StateDelta; 
+  characterSkills: Record<string, number>,
+): {
+  delta: StateDelta;
   events: string[];
   npcStateUpdates: Record<string, unknown>;
 } {
@@ -80,7 +81,30 @@ function computeDelta(
   const events: string[] = [];
   const npcStateUpdates: Record<string, unknown> = {};
 
-  // Stamina costs
+  // ── REST / RECOVERY ───────────────────────────────────────────
+  if (
+    /\b(rest|sit|breathe|recover|catch my breath|take a moment|take a break|meditate|sleep|wait)\b/
+      .test(lower)
+  ) {
+    delta.stamina = 8;
+    delta.hp = 2;
+    events.push("PLAYER_RESTED");
+    return { delta, events, npcStateUpdates };
+  }
+
+  // ── CONSUMABLE USE ────────────────────────────────────────────
+  if (
+    /\b(use|drink|apply|consume)\b.*(salve|potion|vial|healing|remedy|bandage)/
+      .test(lower) ||
+    /\b(healing salve|health potion)\b/.test(lower)
+  ) {
+    events.push("ITEM_USED");
+    // Actual item consumption handled in main flow — flag here for routing
+    delta.hp = 12;
+    return { delta, events, npcStateUpdates };
+  }
+
+  // ── STAMINA COSTS ─────────────────────────────────────────────
   if (/attack|strike|stab|charge|backstab|slash|punch|kick/.test(lower)) {
     delta.stamina = -3;
     events.push("COMBAT_TURN_RESOLVED");
@@ -97,6 +121,10 @@ function computeDelta(
 
   // Roll outcomes
   if (roll) {
+    const isAttack = /attack|strike|stab|slash|backstab|punch|kick/.test(lower);
+    if (isAttack && delta.stamina === undefined) {
+      delta.stamina = -3;
+    }
     if (roll.tier === "CRITICAL_SUCCESS") {
       delta.xp = 30;
       if (/attack|strike|stab|slash|backstab/.test(lower)) {
@@ -173,7 +201,7 @@ function findTargetNpc(
   // First try to match by name
   for (const npc of npcsInScene) {
     const name = (npc.name as string).toLowerCase();
-    if (action.includes(name.split(' ')[0].toLowerCase())) return npc;
+    if (action.includes(name.split(" ")[0].toLowerCase())) return npc;
   }
   // Default to first hostile NPC
   const hostile = npcsInScene.find((n) => n.is_hostile === true);
@@ -221,7 +249,8 @@ async function checkStoryBeats(
 
     let triggered = false;
     const triggerData = beat.trigger_data as Record<string, unknown>;
-    const npcStates = (campaignState.npc_states as Record<string, unknown>) || {};
+    const npcStates = (campaignState.npc_states as Record<string, unknown>) ||
+      {};
 
     if (beat.trigger_type === "NPC_DEFEATED") {
       const npcId = triggerData.npc_id as string;
@@ -229,14 +258,17 @@ async function checkStoryBeats(
       if (npcState?.is_dead) triggered = true;
     }
 
-    if (beat.trigger_type === "EVENT" && events.includes(triggerData.event as string)) {
+    if (
+      beat.trigger_type === "EVENT" &&
+      events.includes(triggerData.event as string)
+    ) {
       triggered = true;
     }
 
     if (beat.trigger_type === "ITEM_ACQUIRED") {
       const inventory = (state.inventory as unknown[]) || [];
       const hasItem = inventory.some(
-        (i) => (i as Record<string, unknown>).item_id === triggerData.item_id
+        (i) => (i as Record<string, unknown>).item_id === triggerData.item_id,
       );
       if (hasItem) triggered = true;
     }
@@ -251,7 +283,7 @@ async function checkStoryBeats(
       if (consequences.grant_items && Array.isArray(consequences.grant_items)) {
         const items = consequences.grant_items as string[];
         console.log("Granting items:", items);
-        
+
         const { data: itemData, error: itemError } = await supabase
           .from("items")
           .select("id, name, description, rarity, item_type, effects")
@@ -267,7 +299,10 @@ async function checkStoryBeats(
             .eq("user_id", userId)
             .single();
 
-          console.log("Current inventory:", JSON.stringify(currentState?.inventory));
+          console.log(
+            "Current inventory:",
+            JSON.stringify(currentState?.inventory),
+          );
           console.log("State error:", JSON.stringify(stateError));
 
           const currentInventory = (currentState?.inventory as unknown[]) ?? [];
@@ -280,6 +315,42 @@ async function checkStoryBeats(
 
           console.log("Inventory update error:", JSON.stringify(updateError));
         }
+      }
+
+      // Handle scene transition
+      if (consequences.scene_transition) {
+        const newScene = consequences.scene_transition as string;
+        await supabase
+          .from("canonical_state")
+          .update({ current_location: newScene })
+          .eq("user_id", userId);
+
+        await supabase
+          .from("player_campaign_state")
+          .update({ current_scene: newScene })
+          .eq("user_id", userId)
+          .eq("campaign_id", campaignId);
+
+        narrationHints.push(`SCENE_TRANSITION:${newScene}`);
+      }
+
+      // Handle quest completion
+      if (consequences.quest_complete) {
+        const questId = consequences.quest_complete as string;
+        const { data: currentState } = await supabase
+          .from("canonical_state")
+          .select("quest_state")
+          .eq("user_id", userId)
+          .single();
+
+        const questState =
+          (currentState?.quest_state as Record<string, unknown>) ?? {};
+        questState[questId] = { status: "completed" };
+
+        await supabase
+          .from("canonical_state")
+          .update({ quest_state: questState })
+          .eq("user_id", userId);
       }
     }
   }
@@ -314,7 +385,8 @@ function buildNarrationContext(
 ): string {
   let ctx = `=== CANONICAL GAME STATE ===\n`;
   ctx += `Character: ${state.character_name} the ${state.character_class}\n`;
-  ctx += `HP: ${state.hp}/${state.hp_max} | MP: ${state.mp}/${state.mp_max} | Stamina: ${state.stamina}/${state.stamina_max}\n`;
+  ctx +=
+    `HP: ${state.hp}/${state.hp_max} | MP: ${state.mp}/${state.mp_max} | Stamina: ${state.stamina}/${state.stamina_max}\n`;
   ctx += `Location: ${state.current_location}\n`;
 
   if (scene) {
@@ -327,18 +399,23 @@ function buildNarrationContext(
     ctx += `\n=== NPCS PRESENT ===\n`;
     for (const npc of npcsInScene) {
       const npcId = npc.id as string;
-      const trackedState = (npcStateUpdates as Record<string, unknown>)[npcId] as Record<string, unknown> | undefined;
+      const trackedState =
+        (npcStateUpdates as Record<string, unknown>)[npcId] as
+          | Record<string, unknown>
+          | undefined;
       const currentHp = trackedState?.hp ?? npc.hp_max ?? npc.hp;
       const isDead = trackedState?.is_dead ?? false;
       const status = isDead ? "DEFEATED" : `HP: ${currentHp}/${npc.hp_max}`;
-      ctx += `${npc.name} [${status}]: ${npc.description}. ${npc.personality}\n`;
+      ctx +=
+        `${npc.name} [${status}]: ${npc.description}. ${npc.personality}\n`;
     }
   }
 
   ctx += `\n=== THIS TURN ===\n`;
   ctx += `Player action: "${action}"\n`;
   if (roll) {
-    ctx += `Roll: d20=${roll.die}+${roll.modifier}=${roll.total} vs DC${roll.dc}. Outcome: ${roll.tier}.\n`;
+    ctx +=
+      `Roll: d20=${roll.die}+${roll.modifier}=${roll.total} vs DC${roll.dc}. Outcome: ${roll.tier}.\n`;
   }
   if (delta.hp !== undefined) ctx += `HP change: ${delta.hp}.\n`;
   if (delta.stamina !== undefined) ctx += `Stamina cost: ${delta.stamina}.\n`;
@@ -346,15 +423,36 @@ function buildNarrationContext(
   if (events.length) ctx += `Events: ${events.join(", ")}.\n`;
 
   if (narrationHints.length > 0) {
-    ctx += `\n=== STORY BEAT TRIGGERED ===\n`;
-    ctx += narrationHints.join("\n") + "\n";
+    const sceneTransitions = narrationHints.filter((h) =>
+      h.startsWith("SCENE_TRANSITION:")
+    );
+    const otherHints = narrationHints.filter((h) =>
+      !h.startsWith("SCENE_TRANSITION:")
+    );
+
+    if (sceneTransitions.length > 0) {
+      const newScene = sceneTransitions[0].replace("SCENE_TRANSITION:", "");
+      ctx += `\n=== SCENE TRANSITION ===\n`;
+      ctx += `The player has moved to: ${newScene.replaceAll("_", " ")}.\n`;
+      ctx +=
+        `Narrate the transition dramatically — describe leaving the old location and arriving somewhere new.\n`;
+    }
+
+    if (otherHints.length > 0) {
+      ctx += `\n=== STORY BEAT TRIGGERED ===\n`;
+      ctx += otherHints.join("\n") + "\n";
+    }
   }
 
   ctx += `\n=== NARRATOR INSTRUCTIONS ===\n`;
-  ctx += `Narrate this turn in 2-4 vivid sentences. Second person present tense. Dark fantasy tone.\n`;
-  ctx += `Use the scene description and NPC personalities to ground the narration.\n`;
-  ctx += `The canonical state above is absolute truth. Never invent items, abilities, or outcomes not shown above.\n`;
-  ctx += `If a story beat was triggered, incorporate its hint dramatically into the narration.`;
+  ctx +=
+    `Narrate this turn in 2-4 vivid sentences. Second person present tense. Dark fantasy tone.\n`;
+  ctx +=
+    `Use the scene description and NPC personalities to ground the narration.\n`;
+  ctx +=
+    `The canonical state above is absolute truth. Never invent items, abilities, or outcomes not shown above.\n`;
+  ctx +=
+    `If a story beat was triggered, incorporate its hint dramatically into the narration.`;
 
   return ctx;
 }
@@ -366,25 +464,32 @@ serve(async (req: Request) => {
     return new Response("ok", {
       headers: {
         "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+        "Access-Control-Allow-Headers":
+          "authorization, x-client-info, apikey, content-type",
       },
     });
   }
 
   try {
     const packet: ActionPacket = await req.json();
-    const { user_id, player_action, route_category, gateway_decision, previous_revision_id } = packet;
+    const {
+      user_id,
+      player_action,
+      route_category,
+      gateway_decision,
+      previous_revision_id,
+    } = packet;
 
     if (gateway_decision === "REJECT" || route_category === "SAFE_REJECT") {
       return new Response(
         JSON.stringify({ error: "Action rejected by gateway" }),
-        { status: 400, headers: { "Content-Type": "application/json" } }
+        { status: 400, headers: { "Content-Type": "application/json" } },
       );
     }
 
     const supabase = createClient(
       Deno.env.get("SUPABASE_URL")!,
-      Deno.env.get("SVC_ROLE_KEY")!
+      Deno.env.get("SVC_ROLE_KEY")!,
     );
 
     // ── 1. Load canonical state ───────────────────────────────────
@@ -397,7 +502,7 @@ serve(async (req: Request) => {
     if (stateError || !state) {
       return new Response(
         JSON.stringify({ error: "Canonical state not found" }),
-        { status: 404, headers: { "Content-Type": "application/json" } }
+        { status: 404, headers: { "Content-Type": "application/json" } },
       );
     }
 
@@ -448,31 +553,59 @@ serve(async (req: Request) => {
     }
 
     // ── 4. Roll if required ───────────────────────────────────────
+    // ── 4. Roll if required ───────────────────────────────────────
     let roll: RollResult | null = null;
     if (route_category === "ROLL_REQUIRED") {
-      const modifier = 5;
+      const skills = (state.skills as Record<string, number>) ?? {};
+      const lower = player_action.toLowerCase();
+
+      // Pick the most relevant skill for this action
+      let modifier = 3; // base
+      if (/attack|strike|stab|slash|backstab/.test(lower)) {
+        modifier = skills.dagger ?? skills.melee ?? skills.strength ?? 3;
+      } else if (/sneak|hide|shadow/.test(lower)) {
+        modifier = skills.stealth ?? 3;
+      } else if (/pick lock|lockpick/.test(lower)) {
+        modifier = skills.lockpick ?? 3;
+      } else if (/persuade|intimidate|deceive|bluff/.test(lower)) {
+        modifier = skills.persuasion ?? skills.intimidate ?? 3;
+      } else if (/search|investigate/.test(lower)) {
+        modifier = skills.perception ?? 3;
+      }
+
       const dc = 14;
       roll = rollD20(modifier, dc);
     }
-
     // ── 5. Compute consequences ───────────────────────────────────
+// ── 5. Compute consequences ───────────────────────────────────
     const npcStates = (campaignState?.npc_states as Record<string, unknown>) ?? {};
+    const characterSkills = (state.skills as Record<string, number>) ?? {};
     const { delta, events, npcStateUpdates } = computeDelta(
       player_action,
       roll,
       npcsInScene,
       npcStates,
+      characterSkills,
     );
     // ── 6. Apply delta to canonical state ─────────────────────────
     const updatedState: Record<string, number> = {};
     if (delta.hp !== undefined) {
-      updatedState.hp = Math.max(0, Math.min(state.hp_max, state.hp + delta.hp));
+      updatedState.hp = Math.max(
+        0,
+        Math.min(state.hp_max, state.hp + delta.hp),
+      );
     }
     if (delta.stamina !== undefined) {
-      updatedState.stamina = Math.max(0, Math.min(state.stamina_max, state.stamina + delta.stamina));
+      updatedState.stamina = Math.max(
+        0,
+        Math.min(state.stamina_max, state.stamina + delta.stamina),
+      );
     }
     if (delta.mp !== undefined) {
-      updatedState.mp = Math.max(0, Math.min(state.mp_max, state.mp + delta.mp));
+      updatedState.mp = Math.max(
+        0,
+        Math.min(state.mp_max, state.mp + delta.mp),
+      );
     }
     if (delta.xp !== undefined) {
       updatedState.xp = state.xp + delta.xp;
@@ -486,12 +619,61 @@ serve(async (req: Request) => {
     if (Object.keys(npcStateUpdates).length > 0) {
       await supabase
         .from("player_campaign_state")
-        .update({ 
+        .update({
           npc_states: mergedNpcStates,
           last_played_at: new Date().toISOString(),
         })
         .eq("user_id", user_id)
         .eq("campaign_id", state.campaign_id);
+    }
+
+    // ── 6c. Handle item consumption ───────────────────────────────
+    if (events.includes("ITEM_USED")) {
+      const lower = player_action.toLowerCase();
+      const inventory = (state.inventory as Record<string, unknown>[]) ?? [];
+
+      // Find which consumable was used
+      const consumablePatterns: Record<string, string> = {
+        "item_healing_salve": /salve|healing salve/.source,
+      };
+
+      let usedItemId: string | null = null;
+      for (const [itemId, pattern] of Object.entries(consumablePatterns)) {
+        if (new RegExp(pattern).test(lower)) {
+          usedItemId = itemId;
+          break;
+        }
+      }
+
+      // Default to first consumable if pattern didn't match
+      if (!usedItemId) {
+        const consumable = inventory.find(
+          (i) => i.item_type === "consumable",
+        );
+        if (consumable) usedItemId = consumable.id as string;
+      }
+
+      if (usedItemId) {
+        const hasItem = inventory.some((i) => i.id === usedItemId);
+        if (hasItem) {
+          // Remove one instance of the item
+          const itemIndex = inventory.findIndex((i) => i.id === usedItemId);
+          const newInventory = [
+            ...inventory.slice(0, itemIndex),
+            ...inventory.slice(itemIndex + 1),
+          ];
+          await supabase
+            .from("canonical_state")
+            .update({ inventory: newInventory })
+            .eq("user_id", user_id);
+
+          events.push("ITEM_CONSUMED");
+        } else {
+          // Player doesn't have the item — remove the HP delta
+          delta.hp = undefined;
+          events.push("ITEM_NOT_FOUND");
+        }
+      }
     }
 
     // ── 7. Write canonical state ──────────────────────────────────
@@ -521,8 +703,7 @@ serve(async (req: Request) => {
 
     // ── 9. Commit revision ────────────────────────────────────────
     const revision_id = generateRevisionId();
-    const autosave_candidate =
-      events.some((e) => e.startsWith("STORY_BEAT")) ||
+    const autosave_candidate = events.some((e) => e.startsWith("STORY_BEAT")) ||
       events.includes("QUEST_UPDATED") ||
       events.includes("COMBAT_TURN_RESOLVED") ||
       events.includes("PLAYER_INJURED");
@@ -558,7 +739,7 @@ serve(async (req: Request) => {
           revision_id,
           event_type,
           payload: { roll, delta },
-        }))
+        })),
       );
     }
 
@@ -593,12 +774,24 @@ serve(async (req: Request) => {
           is_hostile: npc.is_hostile,
         })),
       }),
+      {
+        headers: {
+          "Content-Type": "application/json",
+          "Access-Control-Allow-Origin": "*",
+        },
+      },
     );
   } catch (err) {
     console.error("simulation_service error:", err);
     return new Response(
       JSON.stringify({ error: String(err) }),
-      { status: 500, headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" } }
+      {
+        status: 500,
+        headers: {
+          "Content-Type": "application/json",
+          "Access-Control-Allow-Origin": "*",
+        },
+      },
     );
   }
 });

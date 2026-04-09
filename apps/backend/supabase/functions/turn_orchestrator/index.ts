@@ -81,6 +81,11 @@ function runDeterministicRouter(input: string): RouteCategory {
   if (/\b(sneak|hide|shadow|disappear|cloak|blend in)\b/.test(lower)) return "ROLL_REQUIRED";
   if (/\b(pick lock|lockpick|persuade|intimidate|deceive|bluff|steal|pickpocket|climb|jump|escape|search|investigate|disarm|hack)\b/.test(lower)) return "ROLL_REQUIRED";
   if (/\b(retreat|flee|run away|back away|exit)\b/.test(lower)) return "NO_ROLL_DETERMINISTIC";
+  
+  // ── Must be before the catch-all "i use" pattern ─────────────
+  if (/\b(rest|sit|breathe|recover|catch my breath|take a moment|take a break|meditate|sleep|wait)\b/.test(lower)) return "NO_ROLL_DETERMINISTIC";
+  if (/\b(use|drink|apply|consume)\b.*(salve|potion|vial|healing|remedy|bandage)/.test(lower) || /\b(healing salve|health potion)\b/.test(lower)) return "NO_ROLL_DETERMINISTIC";
+
   if (/\b(i |my |we )(try|attempt|grab|take|use|open|push|pull|lift|break|destroy|throw|place|drop|equip|unequip)\b/.test(lower)) return "ROLL_REQUIRED";
 
   return "CLARIFICATION_REQUIRED";
