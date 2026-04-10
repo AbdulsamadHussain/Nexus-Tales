@@ -219,6 +219,61 @@ function getNpcHp(
   return npc.hp_max as number ?? npc.hp as number ?? 20;
 }
 
+// ── RELATIONSHIP SCORING ──────────────────────────────────────────
+// Returns which NPC was spoken to and the score delta.
+// Tone is inferred from action text — positive, neutral, or hostile.
+
+function computeRelationshipDelta(
+  action: string,
+  npcsInScene: Record<string, unknown>[],
+): { npcId: string; npcName: string; delta: number } | null {
+  const lower = action.toLowerCase();
+
+  // Only fire on speak/social actions
+  if (!/speak|talk|say|tell|ask|greet|thank|apologize|threaten|insult|persuade|intimidate|deceive|offer|promise/.test(lower)) {
+    return null;
+  }
+
+  // Find target NPC
+  let targetNpc: Record<string, unknown> | null = null;
+  for (const npc of npcsInScene) {
+    const name = (npc.name as string).toLowerCase();
+    const firstName = name.split(' ')[0];
+    if (lower.includes(firstName)) {
+      targetNpc = npc;
+      break;
+    }
+  }
+  // Default to first non-hostile NPC for general speech
+  if (!targetNpc) {
+    targetNpc = npcsInScene.find((n) => !n.is_hostile) ?? npcsInScene[0] ?? null;
+  }
+  if (!targetNpc) return null;
+
+  // Infer tone → score delta
+  let delta = 1; // default: neutral speech is slightly positive
+  if (/thank|help|ally|friend|trust|honest|kind|grateful|promise|protect/.test(lower)) delta = 4;
+  if (/agree|cooperate|share|offer|assist|support/.test(lower)) delta = 3;
+  if (/threaten|insult|betray|lie|deceive|manipulate|demand|accuse/.test(lower)) delta = -4;
+  if (/intimidate|coerce|force|attack verbally|mock|humiliate/.test(lower)) delta = -3;
+
+  return {
+    npcId: targetNpc.id as string,
+    npcName: targetNpc.name as string,
+    delta,
+  };
+}
+
+// Check if a relationship score crosses a tier threshold
+function getRelationshipTier(score: number): string {
+  if (score <= -51) return "Hostile";
+  if (score <= -11) return "Distrustful";
+  if (score <= 10)  return "Neutral";
+  if (score <= 40)  return "Warm";
+  if (score <= 75)  return "Loyal";
+  return "Devoted";
+}
+
 // ── CHECK STORY BEATS ─────────────────────────────────────────────
 // After every turn, check if any story beat conditions are met.
 // If so, apply consequences and return narration hints.
@@ -396,20 +451,22 @@ function buildNarrationContext(
   }
 
   if (npcsInScene.length > 0) {
-    ctx += `\n=== NPCS PRESENT ===\n`;
-    for (const npc of npcsInScene) {
-      const npcId = npc.id as string;
-      const trackedState =
-        (npcStateUpdates as Record<string, unknown>)[npcId] as
-          | Record<string, unknown>
-          | undefined;
-      const currentHp = trackedState?.hp ?? npc.hp_max ?? npc.hp;
-      const isDead = trackedState?.is_dead ?? false;
-      const status = isDead ? "DEFEATED" : `HP: ${currentHp}/${npc.hp_max}`;
-      ctx +=
-        `${npc.name} [${status}]: ${npc.description}. ${npc.personality}\n`;
+      ctx += `\n=== NPCS PRESENT ===\n`;
+      const relationships = (state.relationships as Record<string, unknown>) ?? {};
+      for (const npc of npcsInScene) {
+        const rel = relationships[npc.id as string] as Record<string, unknown> | undefined;
+        const relInfo = rel ? ` | Relationship: ${rel.tier} (${rel.score})` : '';
+        const npcId = npc.id as string;
+        const trackedState =
+          (npcStateUpdates as Record<string, unknown>)[npcId] as
+            | Record<string, unknown>
+            | undefined;
+        const currentHp = trackedState?.hp ?? npc.hp_max ?? npc.hp;
+        const isDead = trackedState?.is_dead ?? false;
+        const status = isDead ? "DEFEATED" : `HP: ${currentHp}/${npc.hp_max}`;
+        ctx += `${npc.name} [${status}${relInfo}]: ${npc.description}. ${npc.personality}\n`;
+      }
     }
-  }
 
   ctx += `\n=== THIS TURN ===\n`;
   ctx += `Player action: "${action}"\n`;
@@ -673,6 +730,33 @@ serve(async (req: Request) => {
           delta.hp = undefined;
           events.push("ITEM_NOT_FOUND");
         }
+      }
+    }
+
+    // ── 6d. Update relationship scores ───────────────────────────
+    const relationshipDelta = computeRelationshipDelta(player_action, npcsInScene);
+    if (relationshipDelta) {
+      const relationships = (state.relationships as Record<string, unknown>) ?? {};
+      const current = relationships[relationshipDelta.npcId] as Record<string, unknown> | undefined;
+      const currentScore = (current?.score as number) ?? 0;
+      const newScore = Math.max(-100, Math.min(100, currentScore + relationshipDelta.delta));
+      const oldTier = getRelationshipTier(currentScore);
+      const newTier = getRelationshipTier(newScore);
+
+      relationships[relationshipDelta.npcId] = {
+        name: relationshipDelta.npcName,
+        score: newScore,
+        tier: newTier,
+      };
+
+      await supabase
+        .from("canonical_state")
+        .update({ relationships })
+        .eq("user_id", user_id);
+
+      // Emit tier change event if threshold crossed
+      if (oldTier !== newTier) {
+        events.push(`RELATIONSHIP_TIER_CHANGED:${relationshipDelta.npcId}:${newTier}`);
       }
     }
 

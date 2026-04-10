@@ -459,7 +459,8 @@ class _CharacterSheetPanelState extends State<CharacterSheetPanel>
           ...relationships.entries.map((e) {
             final rel = e.value as Map<String, dynamic>;
             final score = rel['score'] as int? ?? 0;
-            return _relationRow(e.key, score, rel['tier'] as String?);
+            final name = rel['name'] as String? ?? e.key;
+            return _relationRow(name, score, rel['tier'] as String?);
           }),
           const SizedBox(height: 12),
         ],
