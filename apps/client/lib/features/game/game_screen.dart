@@ -5,6 +5,7 @@ import 'package:http/http.dart' as http;
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'character_sheet_panel.dart';
 import 'combat_panel.dart';
+import 'saves_panel.dart';
 
 class GameScreen extends ConsumerStatefulWidget {
   const GameScreen({super.key});
@@ -20,6 +21,7 @@ class _GameScreenState extends ConsumerState<GameScreen> {
 
   bool _busy = false;
   bool _showCharacterSheet = false;
+  bool _showSavesPanel = false;
   List<Map<String, dynamic>> _npcsInScene = [];
   Map<String, dynamic> _npcStates = {};
 
@@ -306,6 +308,16 @@ class _GameScreenState extends ConsumerState<GameScreen> {
               if (mounted) Navigator.of(context).pushReplacementNamed('/');
             },
           ),
+          IconButton(
+            icon: Icon(
+              Icons.save_outlined,
+              color: _showSavesPanel
+                  ? const Color(0xFF4CAF82)
+                  : const Color(0xFF4A5A72),
+              size: 18,
+            ),
+            onPressed: () => setState(() => _showSavesPanel = !_showSavesPanel),
+          ),
         ],
       ),
       body: Row(
@@ -321,12 +333,32 @@ class _GameScreenState extends ConsumerState<GameScreen> {
                     itemBuilder: (context, i) => _buildMessage(_log[i]),
                   ),
                 ),
-                if (_npcsInScene.any((n) => n['is_hostile'] == true && (_npcStates[n['id']]?['is_dead'] != true)))
-                CombatPanel(npcsInScene: _npcsInScene, npcStates: _npcStates),
+                if (_npcsInScene.any(
+                  (n) =>
+                      n['is_hostile'] == true &&
+                      (_npcStates[n['id']]?['is_dead'] != true),
+                ))
+                  CombatPanel(npcsInScene: _npcsInScene, npcStates: _npcStates),
                 _buildInputBar(),
               ],
             ),
           ),
+          if (_showSavesPanel)
+            SavesPanel(
+              onClose: () => setState(() => _showSavesPanel = false),
+              onLoaded: () async {
+                await _loadCanonicalState();
+                setState(() {
+                  _showSavesPanel = false;
+                  _npcsInScene.clear();
+                  _npcStates.clear();
+                  _log.add({
+                    'type': 'save_divider',
+                    'text': 'Game loaded from save.',
+                  });
+                });
+              },
+            ),
           if (_showCharacterSheet && _canonicalState != null)
             CharacterSheetPanel(
               canonicalState: _canonicalState!,
@@ -494,6 +526,51 @@ class _GameScreenState extends ConsumerState<GameScreen> {
                     fontStyle: FontStyle.italic,
                   ),
                 ),
+              ),
+            ],
+          ),
+        );
+
+      case 'save_divider':
+        return Container(
+          margin: const EdgeInsets.symmetric(vertical: 16),
+          child: Row(
+            children: [
+              const Expanded(
+                child: Divider(color: Color(0xFF2D3A4A), thickness: 1),
+              ),
+              const SizedBox(width: 12),
+              Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 4,
+                ),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF1A2230),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(
+                    color: const Color(0xFF4CAF82).withOpacity(0.3),
+                  ),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: const [
+                    Icon(Icons.restore, color: Color(0xFF4CAF82), size: 12),
+                    SizedBox(width: 5),
+                    Text(
+                      'SAVE LOADED',
+                      style: TextStyle(
+                        color: Color(0xFF4CAF82),
+                        fontSize: 9,
+                        letterSpacing: 2,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 12),
+              const Expanded(
+                child: Divider(color: Color(0xFF2D3A4A), thickness: 1),
               ),
             ],
           ),
