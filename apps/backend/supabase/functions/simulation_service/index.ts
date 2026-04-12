@@ -230,7 +230,10 @@ function computeRelationshipDelta(
   const lower = action.toLowerCase();
 
   // Only fire on speak/social actions
-  if (!/speak|talk|say|tell|ask|greet|thank|apologize|threaten|insult|persuade|intimidate|deceive|offer|promise/.test(lower)) {
+  if (
+    !/speak|talk|say|tell|ask|greet|thank|apologize|threaten|insult|persuade|intimidate|deceive|offer|promise/
+      .test(lower)
+  ) {
     return null;
   }
 
@@ -238,7 +241,7 @@ function computeRelationshipDelta(
   let targetNpc: Record<string, unknown> | null = null;
   for (const npc of npcsInScene) {
     const name = (npc.name as string).toLowerCase();
-    const firstName = name.split(' ')[0];
+    const firstName = name.split(" ")[0];
     if (lower.includes(firstName)) {
       targetNpc = npc;
       break;
@@ -246,16 +249,25 @@ function computeRelationshipDelta(
   }
   // Default to first non-hostile NPC for general speech
   if (!targetNpc) {
-    targetNpc = npcsInScene.find((n) => !n.is_hostile) ?? npcsInScene[0] ?? null;
+    targetNpc = npcsInScene.find((n) => !n.is_hostile) ?? npcsInScene[0] ??
+      null;
   }
   if (!targetNpc) return null;
 
   // Infer tone → score delta
   let delta = 1; // default: neutral speech is slightly positive
-  if (/thank|help|ally|friend|trust|honest|kind|grateful|promise|protect/.test(lower)) delta = 4;
+  if (
+    /thank|help|ally|friend|trust|honest|kind|grateful|promise|protect/.test(
+      lower,
+    )
+  ) delta = 4;
   if (/agree|cooperate|share|offer|assist|support/.test(lower)) delta = 3;
-  if (/threaten|insult|betray|lie|deceive|manipulate|demand|accuse/.test(lower)) delta = -4;
-  if (/intimidate|coerce|force|attack verbally|mock|humiliate/.test(lower)) delta = -3;
+  if (
+    /threaten|insult|betray|lie|deceive|manipulate|demand|accuse/.test(lower)
+  ) delta = -4;
+  if (/intimidate|coerce|force|attack verbally|mock|humiliate/.test(lower)) {
+    delta = -3;
+  }
 
   return {
     npcId: targetNpc.id as string,
@@ -268,9 +280,9 @@ function computeRelationshipDelta(
 function getRelationshipTier(score: number): string {
   if (score <= -51) return "Hostile";
   if (score <= -11) return "Distrustful";
-  if (score <= 10)  return "Neutral";
-  if (score <= 40)  return "Warm";
-  if (score <= 75)  return "Loyal";
+  if (score <= 10) return "Neutral";
+  if (score <= 40) return "Warm";
+  if (score <= 75) return "Loyal";
   return "Devoted";
 }
 
@@ -451,22 +463,26 @@ function buildNarrationContext(
   }
 
   if (npcsInScene.length > 0) {
-      ctx += `\n=== NPCS PRESENT ===\n`;
-      const relationships = (state.relationships as Record<string, unknown>) ?? {};
-      for (const npc of npcsInScene) {
-        const rel = relationships[npc.id as string] as Record<string, unknown> | undefined;
-        const relInfo = rel ? ` | Relationship: ${rel.tier} (${rel.score})` : '';
-        const npcId = npc.id as string;
-        const trackedState =
-          (npcStateUpdates as Record<string, unknown>)[npcId] as
-            | Record<string, unknown>
-            | undefined;
-        const currentHp = trackedState?.hp ?? npc.hp_max ?? npc.hp;
-        const isDead = trackedState?.is_dead ?? false;
-        const status = isDead ? "DEFEATED" : `HP: ${currentHp}/${npc.hp_max}`;
-        ctx += `${npc.name} [${status}${relInfo}]: ${npc.description}. ${npc.personality}\n`;
-      }
+    ctx += `\n=== NPCS PRESENT ===\n`;
+    const relationships = (state.relationships as Record<string, unknown>) ??
+      {};
+    for (const npc of npcsInScene) {
+      const rel = relationships[npc.id as string] as
+        | Record<string, unknown>
+        | undefined;
+      const relInfo = rel ? ` | Relationship: ${rel.tier} (${rel.score})` : "";
+      const npcId = npc.id as string;
+      const trackedState =
+        (npcStateUpdates as Record<string, unknown>)[npcId] as
+          | Record<string, unknown>
+          | undefined;
+      const currentHp = trackedState?.hp ?? npc.hp_max ?? npc.hp;
+      const isDead = trackedState?.is_dead ?? false;
+      const status = isDead ? "DEFEATED" : `HP: ${currentHp}/${npc.hp_max}`;
+      ctx +=
+        `${npc.name} [${status}${relInfo}]: ${npc.description}. ${npc.personality}\n`;
     }
+  }
 
   ctx += `\n=== THIS TURN ===\n`;
   ctx += `Player action: "${action}"\n`;
@@ -512,6 +528,50 @@ function buildNarrationContext(
     `If a story beat was triggered, incorporate its hint dramatically into the narration.`;
 
   return ctx;
+}
+
+// ── SUMMARY TRIGGER EVALUATION ────────────────────────────────────
+// Returns whether a summary job should be queued this turn,
+// and updates the turn counter + cooldown on canonical_state.
+
+async function evaluateSummaryTrigger(
+  supabase: ReturnType<typeof createClient>,
+  userId: string,
+  events: string[],
+  currentTurnsSinceSummary: number,
+  hardCooldown: number,
+): Promise<
+  {
+    shouldQueue: boolean;
+    isHard: boolean;
+    newTurnCount: number;
+    newCooldown: number;
+  }
+> {
+  const hardTriggerPatterns = [
+    "NPC_DEFEATED",
+    "QUEST_UPDATED",
+    "STORY_BEAT:",
+    "RELATIONSHIP_TIER_CHANGED:",
+    "PLAYER_INJURED",
+    "LOCATION_CHANGED",
+  ];
+
+  const isHard = events.some((e) =>
+    hardTriggerPatterns.some((p) => e.startsWith(p))
+  );
+
+  // Soft trigger: 8 turns since last summary, not suppressed by hard cooldown
+  const softSuppressed = hardCooldown > 0;
+  const isSoft = !softSuppressed && currentTurnsSinceSummary >= 7;
+
+  const shouldQueue = isHard || isSoft;
+
+  // Update counters
+  const newTurnCount = shouldQueue ? 0 : currentTurnsSinceSummary + 1;
+  const newCooldown = isHard ? 3 : Math.max(0, hardCooldown - 1);
+
+  return { shouldQueue, isHard, newTurnCount, newCooldown };
 }
 
 // ── MAIN ─────────────────────────────────────────────────────────
@@ -634,8 +694,9 @@ serve(async (req: Request) => {
       roll = rollD20(modifier, dc);
     }
     // ── 5. Compute consequences ───────────────────────────────────
-// ── 5. Compute consequences ───────────────────────────────────
-    const npcStates = (campaignState?.npc_states as Record<string, unknown>) ?? {};
+    // ── 5. Compute consequences ───────────────────────────────────
+    const npcStates = (campaignState?.npc_states as Record<string, unknown>) ??
+      {};
     const characterSkills = (state.skills as Record<string, number>) ?? {};
     const { delta, events, npcStateUpdates } = computeDelta(
       player_action,
@@ -734,12 +795,21 @@ serve(async (req: Request) => {
     }
 
     // ── 6d. Update relationship scores ───────────────────────────
-    const relationshipDelta = computeRelationshipDelta(player_action, npcsInScene);
+    const relationshipDelta = computeRelationshipDelta(
+      player_action,
+      npcsInScene,
+    );
     if (relationshipDelta) {
-      const relationships = (state.relationships as Record<string, unknown>) ?? {};
-      const current = relationships[relationshipDelta.npcId] as Record<string, unknown> | undefined;
+      const relationships = (state.relationships as Record<string, unknown>) ??
+        {};
+      const current = relationships[relationshipDelta.npcId] as
+        | Record<string, unknown>
+        | undefined;
       const currentScore = (current?.score as number) ?? 0;
-      const newScore = Math.max(-100, Math.min(100, currentScore + relationshipDelta.delta));
+      const newScore = Math.max(
+        -100,
+        Math.min(100, currentScore + relationshipDelta.delta),
+      );
       const oldTier = getRelationshipTier(currentScore);
       const newTier = getRelationshipTier(newScore);
 
@@ -756,7 +826,9 @@ serve(async (req: Request) => {
 
       // Emit tier change event if threshold crossed
       if (oldTier !== newTier) {
-        events.push(`RELATIONSHIP_TIER_CHANGED:${relationshipDelta.npcId}:${newTier}`);
+        events.push(
+          `RELATIONSHIP_TIER_CHANGED:${relationshipDelta.npcId}:${newTier}`,
+        );
       }
     }
 
@@ -785,6 +857,31 @@ serve(async (req: Request) => {
       events.push(...beatsFired.map((id) => `STORY_BEAT:${id}`));
     }
 
+    // ── 8b. Evaluate summary trigger ─────────────────────────────
+    const turnsSinceSummary = (state.turns_since_last_summary as number) ?? 0;
+    const hardCooldown = (state.hard_summary_cooldown as number) ?? 0;
+
+    const { shouldQueue, isHard, newTurnCount, newCooldown } =
+      await evaluateSummaryTrigger(
+        supabase,
+        user_id,
+        events,
+        turnsSinceSummary,
+        hardCooldown,
+      );
+
+    // Update summary tracking fields on canonical_state
+    await supabase
+      .from("canonical_state")
+      .update({
+        turns_since_last_summary: newTurnCount,
+        hard_summary_cooldown: newCooldown,
+        last_summary_type: shouldQueue
+          ? (isHard ? "hard" : "soft")
+          : state.last_summary_type,
+      })
+      .eq("user_id", user_id);
+
     // ── 9. Commit revision ────────────────────────────────────────
     const revision_id = generateRevisionId();
     const autosave_candidate = events.some((e) => e.startsWith("STORY_BEAT")) ||
@@ -811,10 +908,10 @@ serve(async (req: Request) => {
         events,
         autosave_candidate,
         narration_done: false,
+        summary_job_queued: shouldQueue,
       });
 
     if (revError) throw revError;
-
     // ── 10. Insert canonical events ───────────────────────────────
     if (events.length > 0) {
       await supabase.from("canonical_events").insert(
@@ -848,7 +945,7 @@ serve(async (req: Request) => {
         state_delta: delta,
         events,
         autosave_candidate,
-        summary_job_queued: false,
+        summary_job_queued: shouldQueue,
         narration_context,
         npc_states: { ...npcStates, ...npcStateUpdates },
         npcs_in_scene: npcsInScene.map((npc) => ({

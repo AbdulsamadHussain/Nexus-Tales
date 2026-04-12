@@ -191,6 +191,7 @@ serve(async (req: Request) => {
       autosave_candidate: simResult.autosave_candidate,
       npc_states: simResult.npc_states,
       npcs_in_scene: simResult.npcs_in_scene,
+      summary_job_queued: simResult.summary_job_queued,
     });
 
   } catch (err) {

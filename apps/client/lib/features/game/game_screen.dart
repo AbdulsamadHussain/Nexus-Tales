@@ -86,7 +86,6 @@ class _GameScreenState extends ConsumerState<GameScreen> {
     });
     _controller.clear();
     _scrollToBottom();
-
     try {
       final response = await Supabase.instance.client.functions.invoke(
         'turn_orchestrator',
@@ -154,6 +153,8 @@ class _GameScreenState extends ConsumerState<GameScreen> {
         data['narration_context'] as String? ?? '',
         data['success_tier'] as String? ?? 'NO_ROLL',
       );
+      _scrollToBottom();
+      _triggerSummaryWorker(data, action);
 
       setState(() {
         _log.add({'type': 'narrator', 'text': narration});
@@ -163,7 +164,6 @@ class _GameScreenState extends ConsumerState<GameScreen> {
               '${data['revision_id']} · ${data['success_tier']} · ${data['route_category']}',
         });
       });
-      _scrollToBottom();
     } catch (e) {
       setState(() {
         _log.add({'type': 'system', 'text': 'Error: $e'});
@@ -780,6 +780,36 @@ Input: "the cabinet I need what is inside" → {"route": "ROLL_REQUIRED", "actio
         _log.add({'type': 'system', 'text': 'Error: $e'});
       });
       _scrollToBottom();
+    }
+  }
+
+  Future<void> _triggerSummaryWorker(
+    Map<String, dynamic> data,
+    String action,
+  ) async {
+    debugPrint(
+      'Summary check: summary_job_queued = ${data['summary_job_queued']}',
+    );
+    if (data['summary_job_queued'] != true) return;
+
+    try {
+      final user = Supabase.instance.client.auth.currentUser!;
+      await Supabase.instance.client.functions.invoke(
+        'summary_worker',
+        body: {
+          'user_id': user.id,
+          'revision_id': data['revision_id'],
+          'trigger_type': 'hard',
+          'events': data['events'],
+          'narration_context': data['narration_context'] ?? '',
+          'ollama_url': 'http://localhost:11434',
+        },
+      );
+      debugPrint(
+        'Summary worker triggered for revision ${data['revision_id']}',
+      );
+    } catch (e) {
+      debugPrint('Summary worker failed (non-blocking): $e');
     }
   }
 }
