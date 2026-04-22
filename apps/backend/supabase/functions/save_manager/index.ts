@@ -1,0 +1,208 @@
+import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+
+interface SaveRequest {
+  action: "SAVE" | "LOAD" | "LIST" | "DELETE";
+  user_id: string;
+  save_name?: string;
+  save_id?: string;
+}
+
+function jsonResponse(body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: {
+      "Content-Type": "application/json",
+      "Access-Control-Allow-Origin": "*",
+    },
+  });
+}
+
+serve(async (req: Request) => {
+  if (req.method === "OPTIONS") {
+    return new Response("ok", {
+      headers: {
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+        "Access-Control-Allow-Methods": "POST, OPTIONS",
+      },
+    });
+  }
+
+  try {
+    const body: SaveRequest = await req.json();
+    const { action, user_id } = body;
+
+    if (!user_id || !action) {
+      return jsonResponse({ error: "Missing required fields" }, 400);
+    }
+
+    const supabase = createClient(
+      Deno.env.get("SUPABASE_URL")!,
+      Deno.env.get("SVC_ROLE_KEY")!,
+    );
+
+    // ── SAVE ─────────────────────────────────────────────────────
+    if (action === "SAVE") {
+      const save_name = body.save_name ?? `Save ${new Date().toLocaleString()}`;
+
+      // Load current canonical state
+      const { data: state, error: stateError } = await supabase
+        .from("canonical_state")
+        .select("*")
+        .eq("user_id", user_id)
+        .single();
+
+      if (stateError || !state) {
+        return jsonResponse({ error: "Canonical state not found" }, 404);
+      }
+
+      // Load current campaign state
+      const { data: campaignState } = await supabase
+        .from("player_campaign_state")
+        .select("*")
+        .eq("user_id", user_id)
+        .eq("campaign_id", state.campaign_id)
+        .maybeSingle();
+
+      // Get latest revision id
+      const { data: latestRevision } = await supabase
+        .from("revisions")
+        .select("id")
+        .eq("user_id", user_id)
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      const { data: save, error: saveError } = await supabase
+        .from("manual_saves")
+        .insert({
+          user_id,
+          revision_id: latestRevision?.id ?? "none",
+          save_name,
+          campaign_id: state.campaign_id,
+          schema_version: state.schema_version ?? 1,
+          state_snapshot: {
+            canonical_state: state,
+            campaign_state: campaignState ?? {},
+          },
+        })
+        .select()
+        .single();
+
+      if (saveError) throw saveError;
+
+      return jsonResponse({
+        status: "SAVED",
+        save_id: save.id,
+        save_name: save.save_name,
+        created_at: save.created_at,
+      });
+    }
+
+    // ── LIST ─────────────────────────────────────────────────────
+    if (action === "LIST") {
+      const { data: saves, error } = await supabase
+        .from("manual_saves")
+        .select("id, save_name, campaign_id, created_at, revision_id")
+        .eq("user_id", user_id)
+        .order("created_at", { ascending: false })
+        .limit(20);
+
+      if (error) throw error;
+
+      return jsonResponse({ status: "OK", saves: saves ?? [] });
+    }
+
+    // ── LOAD ─────────────────────────────────────────────────────
+    if (action === "LOAD") {
+      if (!body.save_id) {
+        return jsonResponse({ error: "save_id required for LOAD" }, 400);
+      }
+
+      const { data: save, error: saveError } = await supabase
+        .from("manual_saves")
+        .select("*")
+        .eq("id", body.save_id)
+        .eq("user_id", user_id)
+        .single();
+
+      if (saveError || !save) {
+        return jsonResponse({ error: "Save not found" }, 404);
+      }
+
+      const snapshot = save.state_snapshot as Record<string, unknown>;
+      const canonicalState = snapshot.canonical_state as Record<string, unknown>;
+      const campaignState = snapshot.campaign_state as Record<string, unknown>;
+
+      // Restore canonical state
+      const { error: restoreError } = await supabase
+        .from("canonical_state")
+        .update({
+          hp: canonicalState.hp,
+          hp_max: canonicalState.hp_max,
+          mp: canonicalState.mp,
+          mp_max: canonicalState.mp_max,
+          stamina: canonicalState.stamina,
+          stamina_max: canonicalState.stamina_max,
+          gold: canonicalState.gold,
+          xp: canonicalState.xp,
+          level: canonicalState.level,
+          current_location: canonicalState.current_location,
+          inventory: canonicalState.inventory,
+          quest_state: canonicalState.quest_state,
+          relationships: canonicalState.relationships,
+          factions: canonicalState.factions,
+          known_lore: canonicalState.known_lore,
+          skills: canonicalState.skills,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("user_id", user_id);
+
+      if (restoreError) throw restoreError;
+
+      // Restore campaign state
+      if (campaignState && campaignState.campaign_id) {
+        await supabase
+          .from("player_campaign_state")
+          .update({
+            current_scene: campaignState.current_scene,
+            npc_states: campaignState.npc_states,
+            beaten_beats: campaignState.beaten_beats,
+            scene_item_states: campaignState.scene_item_states,
+          })
+          .eq("user_id", user_id)
+          .eq("campaign_id", campaignState.campaign_id);
+      }
+
+      return jsonResponse({
+        status: "LOADED",
+        save_name: save.save_name,
+        restored_location: canonicalState.current_location,
+      });
+    }
+
+    // ── DELETE ───────────────────────────────────────────────────
+    if (action === "DELETE") {
+      if (!body.save_id) {
+        return jsonResponse({ error: "save_id required for DELETE" }, 400);
+      }
+
+      const { error } = await supabase
+        .from("manual_saves")
+        .delete()
+        .eq("id", body.save_id)
+        .eq("user_id", user_id);
+
+      if (error) throw error;
+
+      return jsonResponse({ status: "DELETED" });
+    }
+
+    return jsonResponse({ error: "Unknown action" }, 400);
+
+  } catch (err) {
+    console.error("save_manager error:", err);
+    return jsonResponse({ error: String(err) }, 500);
+  }
+});
