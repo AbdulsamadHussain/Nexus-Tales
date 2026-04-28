@@ -4,12 +4,16 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 class CharacterSheetPanel extends StatefulWidget {
   final Map<String, dynamic> canonicalState;
   final VoidCallback onClose;
+  final VoidCallback? onSettingChanged;
+  final Map<String, dynamic> contentSettings;
 
-  const CharacterSheetPanel({
-    super.key,
-    required this.canonicalState,
-    required this.onClose,
-  });
+const CharacterSheetPanel({
+  super.key,
+  required this.canonicalState,
+  required this.contentSettings,
+  required this.onClose,
+  this.onSettingChanged,
+});
 
   @override
   State<CharacterSheetPanel> createState() => _CharacterSheetPanelState();
@@ -18,6 +22,7 @@ class CharacterSheetPanel extends StatefulWidget {
 class _CharacterSheetPanelState extends State<CharacterSheetPanel>
     with SingleTickerProviderStateMixin {
   late TabController _tabController;
+  Map<String, dynamic>? _localContentSettings;
 
   @override
   void initState() {
@@ -136,11 +141,26 @@ class _CharacterSheetPanelState extends State<CharacterSheetPanel>
       ),
       child: Column(
         children: [
-          _statBar('HP', s['hp'] as int, s['hp_max'] as int, const Color(0xFFE05555)),
+          _statBar(
+            'HP',
+            s['hp'] as int,
+            s['hp_max'] as int,
+            const Color(0xFFE05555),
+          ),
           const SizedBox(height: 6),
-          _statBar('MP', s['mp'] as int, s['mp_max'] as int, const Color(0xFF4A9EFF)),
+          _statBar(
+            'MP',
+            s['mp'] as int,
+            s['mp_max'] as int,
+            const Color(0xFF4A9EFF),
+          ),
           const SizedBox(height: 6),
-          _statBar('ST', s['stamina'] as int, s['stamina_max'] as int, const Color(0xFF4CAF82)),
+          _statBar(
+            'ST',
+            s['stamina'] as int,
+            s['stamina_max'] as int,
+            const Color(0xFF4CAF82),
+          ),
         ],
       ),
     );
@@ -211,16 +231,26 @@ class _CharacterSheetPanelState extends State<CharacterSheetPanel>
         _statRow('Level', '${s['level']}', const Color(0xFF8898B0)),
         const SizedBox(height: 12),
         _sectionTitle('Location'),
-        _statRow('Scene', _formatId(s['current_location'] as String? ?? ''), const Color(0xFF8898B0)),
-        _statRow('Campaign', _formatId(s['campaign_id'] as String? ?? ''), const Color(0xFF8898B0)),
+        _statRow(
+          'Scene',
+          _formatId(s['current_location'] as String? ?? ''),
+          const Color(0xFF8898B0),
+        ),
+        _statRow(
+          'Campaign',
+          _formatId(s['campaign_id'] as String? ?? ''),
+          const Color(0xFF8898B0),
+        ),
         const SizedBox(height: 12),
         _sectionTitle('Content settings'),
-        ..._buildContentSettings(s['content_settings'] as Map<String, dynamic>? ?? {}),
+        ..._buildContentSettings(
+          _localContentSettings ?? widget.contentSettings,
+        ),
       ],
     );
   }
 
-  List<Widget> _buildContentSettings(Map<String, dynamic> settings) {
+List<Widget> _buildContentSettings(Map<String, dynamic> settings) {
     final labels = {
       'violence': 'Violence',
       'horror': 'Horror',
@@ -247,18 +277,63 @@ class _CharacterSheetPanelState extends State<CharacterSheetPanel>
               style: const TextStyle(color: Color(0xFF8898B0), fontSize: 12),
             ),
             const Spacer(),
-            Text(
-              on ? 'ON' : 'OFF',
-              style: TextStyle(
-                color: on ? const Color(0xFF4CAF82) : const Color(0xFF4A5A72),
-                fontSize: 10,
-                letterSpacing: 1,
+            GestureDetector(
+              onTap: () => _toggleContentSetting(e.key, !on, settings),
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                decoration: BoxDecoration(
+                  color: on
+                      ? const Color(0xFF4CAF82).withOpacity(0.1)
+                      : const Color(0xFF1A2230),
+                  borderRadius: BorderRadius.circular(4),
+                  border: Border.all(
+                    color: on
+                        ? const Color(0xFF4CAF82).withOpacity(0.4)
+                        : const Color(0xFF2D3A4A),
+                  ),
+                ),
+                child: Text(
+                  on ? 'ON' : 'OFF',
+                  style: TextStyle(
+                    color: on
+                        ? const Color(0xFF4CAF82)
+                        : const Color(0xFF4A5A72),
+                    fontSize: 10,
+                    letterSpacing: 1,
+                  ),
+                ),
               ),
             ),
           ],
         ),
       );
     }).toList();
+  }
+
+Future<void> _toggleContentSetting(
+    String key,
+    bool newValue,
+    Map<String, dynamic> currentSettings,
+  ) async {
+    final updated = Map<String, dynamic>.from(currentSettings);
+    updated[key] = newValue;
+
+    // Update UI immediately
+    setState(() => _localContentSettings = updated);
+
+    try {
+      final user = Supabase.instance.client.auth.currentUser!;
+      await Supabase.instance.client
+          .from('user_preferences')
+          .update({'content_settings': updated})
+          .eq('user_id', user.id);
+
+      widget.onSettingChanged?.call();
+    } catch (e) {
+      debugPrint('Content setting toggle failed: $e');
+      // Revert on failure
+      setState(() => _localContentSettings = currentSettings);
+    }
   }
 
   // ── INVENTORY TAB ───────────────────────────────────────────────
@@ -294,11 +369,13 @@ class _CharacterSheetPanelState extends State<CharacterSheetPanel>
 
   Widget _inventoryItem(Map<String, dynamic> item) {
     final rarity = item['rarity'] as String? ?? 'common';
-    final rarityColor = {
-      'common': const Color(0xFF8898B0),
-      'rare': const Color(0xFF4A9EFF),
-      'legendary': const Color(0xFFC9A84C),
-    }[rarity] ?? const Color(0xFF8898B0);
+    final rarityColor =
+        {
+          'common': const Color(0xFF8898B0),
+          'rare': const Color(0xFF4A9EFF),
+          'legendary': const Color(0xFFC9A84C),
+        }[rarity] ??
+        const Color(0xFF8898B0);
 
     return Container(
       margin: const EdgeInsets.only(bottom: 6),
@@ -360,7 +437,8 @@ class _CharacterSheetPanelState extends State<CharacterSheetPanel>
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: const [
-            Icon(Icons.assignment_outlined, color: Color(0xFF2D3A4A), size: 32),            SizedBox(height: 8),
+            Icon(Icons.assignment_outlined, color: Color(0xFF2D3A4A), size: 32),
+            SizedBox(height: 8),
             Text(
               'No active quests',
               style: TextStyle(color: Color(0xFF4A5A72), fontSize: 12),
@@ -375,11 +453,13 @@ class _CharacterSheetPanelState extends State<CharacterSheetPanel>
       children: questState.entries.map((e) {
         final quest = e.value as Map<String, dynamic>;
         final status = quest['status'] as String? ?? 'active';
-        final statusColor = {
-          'active': const Color(0xFF4A9EFF),
-          'completed': const Color(0xFF4CAF82),
-          'failed': const Color(0xFFE05555),
-        }[status] ?? const Color(0xFF8898B0);
+        final statusColor =
+            {
+              'active': const Color(0xFF4A9EFF),
+              'completed': const Color(0xFF4CAF82),
+              'failed': const Color(0xFFE05555),
+            }[status] ??
+            const Color(0xFF8898B0);
 
         return Container(
           margin: const EdgeInsets.only(bottom: 8),
@@ -387,9 +467,7 @@ class _CharacterSheetPanelState extends State<CharacterSheetPanel>
           decoration: BoxDecoration(
             color: const Color(0xFF1A2230),
             borderRadius: BorderRadius.circular(5),
-            border: Border(
-              left: BorderSide(color: statusColor, width: 2),
-            ),
+            border: Border(left: BorderSide(color: statusColor, width: 2)),
           ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -477,11 +555,16 @@ class _CharacterSheetPanelState extends State<CharacterSheetPanel>
   }
 
   Widget _relationRow(String name, int score, String? tier) {
-    final color = score <= -51 ? const Color(0xFFE05555)
-        : score <= -11 ? const Color(0xFFE09A40)
-        : score <= 10  ? const Color(0xFF8898B0)
-        : score <= 40  ? const Color(0xFF2DD4BF)
-        : score <= 75  ? const Color(0xFF4A9EFF)
+    final color = score <= -51
+        ? const Color(0xFFE05555)
+        : score <= -11
+        ? const Color(0xFFE09A40)
+        : score <= 10
+        ? const Color(0xFF8898B0)
+        : score <= 40
+        ? const Color(0xFF2DD4BF)
+        : score <= 75
+        ? const Color(0xFF4A9EFF)
         : const Color(0xFFC9A84C);
 
     final pct = ((score + 100) / 200).clamp(0.0, 1.0);
@@ -496,12 +579,19 @@ class _CharacterSheetPanelState extends State<CharacterSheetPanel>
               Expanded(
                 child: Text(
                   name,
-                  style: const TextStyle(color: Color(0xFFD4DCE8), fontSize: 12),
+                  style: const TextStyle(
+                    color: Color(0xFFD4DCE8),
+                    fontSize: 12,
+                  ),
                 ),
               ),
               Text(
                 tier ?? _tierLabel(score),
-                style: TextStyle(color: color, fontSize: 10, letterSpacing: 0.5),
+                style: TextStyle(
+                  color: color,
+                  fontSize: 10,
+                  letterSpacing: 0.5,
+                ),
               ),
             ],
           ),
@@ -541,9 +631,19 @@ class _CharacterSheetPanelState extends State<CharacterSheetPanel>
       padding: const EdgeInsets.only(bottom: 6),
       child: Row(
         children: [
-          Text(label, style: const TextStyle(color: Color(0xFF4A5A72), fontSize: 12)),
+          Text(
+            label,
+            style: const TextStyle(color: Color(0xFF4A5A72), fontSize: 12),
+          ),
           const Spacer(),
-          Text(value, style: TextStyle(color: valueColor, fontSize: 12, fontFamily: 'monospace')),
+          Text(
+            value,
+            style: TextStyle(
+              color: valueColor,
+              fontSize: 12,
+              fontFamily: 'monospace',
+            ),
+          ),
         ],
       ),
     );
@@ -556,9 +656,9 @@ class _CharacterSheetPanelState extends State<CharacterSheetPanel>
   String _tierLabel(int score) {
     if (score <= -51) return 'Hostile';
     if (score <= -11) return 'Distrustful';
-    if (score <= 10)  return 'Neutral';
-    if (score <= 40)  return 'Warm';
-    if (score <= 75)  return 'Loyal';
+    if (score <= 10) return 'Neutral';
+    if (score <= 40) return 'Warm';
+    if (score <= 75) return 'Loyal';
     return 'Devoted';
   }
 }

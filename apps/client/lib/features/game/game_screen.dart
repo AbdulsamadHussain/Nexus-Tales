@@ -27,11 +27,13 @@ class _GameScreenState extends ConsumerState<GameScreen> {
 
   String? _lastRevisionId;
   Map<String, dynamic>? _canonicalState;
+  Map<String, dynamic>? _userPreferences;
 
   @override
   void initState() {
     super.initState();
     _loadCanonicalState();
+    _loadUserPreferences();
   }
 
   @override
@@ -49,6 +51,18 @@ class _GameScreenState extends ConsumerState<GameScreen> {
         .eq('user_id', user.id)
         .single();
     setState(() => _canonicalState = data);
+  }
+
+  Future<void> _loadUserPreferences() async {
+    final user = Supabase.instance.client.auth.currentUser!;
+    final data = await Supabase.instance.client
+        .from('user_preferences')
+        .select('*')
+        .eq('user_id', user.id)
+        .maybeSingle();
+    if (data != null) {
+      setState(() => _userPreferences = data);
+    }
   }
 
   void _scrollToBottom() {
@@ -93,27 +107,52 @@ class _GameScreenState extends ConsumerState<GameScreen> {
           'user_id': user.id,
           'player_action': action,
           'previous_revision_id': _lastRevisionId,
-          'content_settings': {
-            'violence': true,
-            'horror': true,
-            'romance': false,
-            'mature': false,
-          },
+          'content_settings': _getContentSettings(),
         },
       );
 
       final data = response.data as Map<String, dynamic>;
 
+      // Handle gateway REJECT
+      if (data['status'] == 'REJECTED') {
+        setState(() {
+          _log.add({
+            'type': 'system',
+            'text': data['player_message'] as String? ?? 'That action is not allowed.',
+          });
+        });
+        _scrollToBottom();
+        return;
+      }
+
+      // §6.3 — No-op after 3 consecutive ambiguous turns
+      if (data['status'] == 'NO_OP') {
+        setState(() {
+          _log.add({
+            'type': 'system',
+            'text': data['player_message'] as String? ??
+                'Your intent remains unclear. Try a different approach.',
+          });
+        });
+        _scrollToBottom();
+        return;
+      }
+
+      // Clarification — try parser assist, but only resubmit if it resolved
+      // to a real actionable route. CLARIFICATION_REQUIRED from the parser
+      // means it also couldn't resolve — just show the clarification bubble.
+      // The orchestrator already incremented the ambiguity counter this turn.
       if (data['status'] == 'CLARIFICATION_REQUIRED') {
         final parsed = await _runParserAssist(action);
         if (parsed != null) {
+          // Parser resolved to a real route — resubmit with it
           await _submitWithRoute(action, parsed['route']!, user.id);
         } else {
+          // Parser couldn't resolve — show clarification bubble
           setState(() {
             _log.add({
               'type': 'clarification',
-              'text':
-                  'What do you do? Describe your action — attack, search, move, speak, or use an item.',
+              'text': 'What do you do? Describe your action — attack, search, move, speak, or use an item.',
             });
           });
           _scrollToBottom();
@@ -160,8 +199,7 @@ class _GameScreenState extends ConsumerState<GameScreen> {
         _log.add({'type': 'narrator', 'text': narration});
         _log.add({
           'type': 'system',
-          'text':
-              '${data['revision_id']} · ${data['success_tier']} · ${data['route_category']}',
+          'text': '${data['revision_id']} · ${data['success_tier']} · ${data['route_category']}',
         });
       });
     } catch (e) {
@@ -362,7 +400,14 @@ class _GameScreenState extends ConsumerState<GameScreen> {
           if (_showCharacterSheet && _canonicalState != null)
             CharacterSheetPanel(
               canonicalState: _canonicalState!,
+              contentSettings:
+                  _userPreferences?['content_settings']
+                      as Map<String, dynamic>? ??
+                  {},
               onClose: () => setState(() => _showCharacterSheet = false),
+              onSettingChanged: () async {
+                await _loadUserPreferences();
+              },
             ),
         ],
       ),
@@ -620,6 +665,10 @@ class _GameScreenState extends ConsumerState<GameScreen> {
     );
   }
 
+  /// Parser assist — returns a resolved route only if Gemma can classify
+  /// the input as a real actionable route. Returns null if unclear.
+  /// CLARIFICATION_REQUIRED from the parser is treated as null —
+  /// the orchestrator already counted this turn's ambiguity.
   Future<Map<String, String>?> _runParserAssist(String input) async {
     try {
       final prompt =
@@ -634,6 +683,7 @@ You MUST respond with exactly this structure:
 The "route" field MUST be one of these exact strings only:
 - "NO_ROLL_DETERMINISTIC" (for speaking, examining, moving, using items)
 - "ROLL_REQUIRED" (for attacking, sneaking, lockpicking, skill checks)
+- "CLARIFICATION_REQUIRED" (for vague, unclear, or nonsensical inputs)
 - "SAFE_REJECT" (for harmful real-world requests)
 
 The "action_type" field MUST be one of:
@@ -642,7 +692,9 @@ The "action_type" field MUST be one of:
 Examples:
 Input: "I say hello to the guard" → {"route": "NO_ROLL_DETERMINISTIC", "action_type": "SPEAK"}
 Input: "my blade finds the gap" → {"route": "ROLL_REQUIRED", "action_type": "ATTACK"}
-Input: "I can carry the truth is what I say to the warden" → {"route": "NO_ROLL_DETERMINISTIC", "action_type": "SPEAK"}
+Input: "maybe" → {"route": "CLARIFICATION_REQUIRED", "action_type": "OTHER"}
+Input: "hmm" → {"route": "CLARIFICATION_REQUIRED", "action_type": "OTHER"}
+Input: "what if" → {"route": "CLARIFICATION_REQUIRED", "action_type": "OTHER"}
 Input: "the cabinet I need what is inside" → {"route": "ROLL_REQUIRED", "action_type": "SKILL_CHECK"}''';
 
       final uri = Uri.parse('http://localhost:11434/api/generate');
@@ -674,19 +726,15 @@ Input: "the cabinet I need what is inside" → {"route": "ROLL_REQUIRED", "actio
 
       final parsed = jsonDecode(jsonMatch.group(0)!) as Map<String, dynamic>;
 
-      final validRoutes = [
-        'ROLL_REQUIRED',
-        'NO_ROLL_DETERMINISTIC',
-        'SAFE_REJECT',
-      ];
       final route = parsed['route'] as String?;
-      if (route == null || !validRoutes.contains(route)) return null;
-      if (route == 'SAFE_REJECT') return null;
+
+      // Only forward real actionable routes — never forward CLARIFICATION_REQUIRED
+      // or SAFE_REJECT back to the orchestrator. The counter already incremented.
+      const actionableRoutes = ['ROLL_REQUIRED', 'NO_ROLL_DETERMINISTIC'];
+      if (route == null || !actionableRoutes.contains(route)) return null;
 
       debugPrint('=== PARSER ASSIST ===');
-      debugPrint(
-        'Input: $input → route: $route, action: ${parsed['action_type']}',
-      );
+      debugPrint('Input: $input → route: $route, action: ${parsed['action_type']}');
       debugPrint('=== END ===');
 
       return {
@@ -712,16 +760,35 @@ Input: "the cabinet I need what is inside" → {"route": "ROLL_REQUIRED", "actio
           'player_action': action,
           'previous_revision_id': _lastRevisionId,
           'resolved_route': resolvedRoute,
-          'content_settings': {
-            'violence': true,
-            'horror': true,
-            'romance': false,
-            'mature': false,
-          },
+          'content_settings': _getContentSettings(),
         },
       );
 
       final data = response.data as Map<String, dynamic>;
+
+      if (data['status'] == 'REJECTED') {
+        setState(() {
+          _log.add({
+            'type': 'system',
+            'text': data['player_message'] as String? ?? 'That action is not allowed.',
+          });
+        });
+        _scrollToBottom();
+        return;
+      }
+
+      if (data['status'] == 'NO_OP') {
+        setState(() {
+          _log.add({
+            'type': 'system',
+            'text': data['player_message'] as String? ??
+                'Your intent remains unclear. Try a different approach.',
+          });
+        });
+        _scrollToBottom();
+        return;
+      }
+
       if (data['status'] == 'CLARIFICATION_REQUIRED') {
         setState(() {
           _log.add({
@@ -770,8 +837,7 @@ Input: "the cabinet I need what is inside" → {"route": "ROLL_REQUIRED", "actio
         _log.add({'type': 'narrator', 'text': narration});
         _log.add({
           'type': 'system',
-          'text':
-              '${data['revision_id']} · ${data['success_tier']} · ${data['route_category']} · parser_assisted',
+          'text': '${data['revision_id']} · ${data['success_tier']} · ${data['route_category']} · parser_assisted',
         });
       });
       _scrollToBottom();
@@ -787,9 +853,7 @@ Input: "the cabinet I need what is inside" → {"route": "ROLL_REQUIRED", "actio
     Map<String, dynamic> data,
     String action,
   ) async {
-    debugPrint(
-      'Summary check: summary_job_queued = ${data['summary_job_queued']}',
-    );
+    debugPrint('Summary check: summary_job_queued = ${data['summary_job_queued']}');
     if (data['summary_job_queued'] != true) return;
 
     try {
@@ -805,11 +869,20 @@ Input: "the cabinet I need what is inside" → {"route": "ROLL_REQUIRED", "actio
           'ollama_url': 'http://localhost:11434',
         },
       );
-      debugPrint(
-        'Summary worker triggered for revision ${data['revision_id']}',
-      );
+      debugPrint('Summary worker triggered for revision ${data['revision_id']}');
     } catch (e) {
       debugPrint('Summary worker failed (non-blocking): $e');
     }
+  }
+
+  Map<String, dynamic> _getContentSettings() {
+    final raw = _userPreferences?['content_settings'];
+    if (raw is Map<String, dynamic>) return raw;
+    if (raw is String) {
+      try {
+        return jsonDecode(raw) as Map<String, dynamic>;
+      } catch (_) {}
+    }
+    return {'violence': true, 'horror': true, 'romance': true, 'mature': false};
   }
 }
