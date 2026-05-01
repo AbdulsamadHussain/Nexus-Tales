@@ -65,6 +65,12 @@ function rollD20(modifier: number, dc: number): RollResult {
   return { die, modifier, total, dc, tier };
 }
 
+// ── NPC COUNTER-ATTACK DAMAGE ─────────────────────────────────────
+// Reads attack_damage from NPC data, falls back to 5 if not set.
+function getNpcCounterDamage(npc: Record<string, unknown>): number {
+  return (npc.attack_damage as number) ?? 5;
+}
+
 function computeDelta(
   action: string,
   roll: RollResult | null,
@@ -75,11 +81,13 @@ function computeDelta(
   delta: StateDelta;
   events: string[];
   npcStateUpdates: Record<string, unknown>;
+  combatNarrationHints: string[];
 } {
   const lower = action.toLowerCase();
   const delta: StateDelta = {};
   const events: string[] = [];
   const npcStateUpdates: Record<string, unknown> = {};
+  const combatNarrationHints: string[] = [];
 
   // ── REST / RECOVERY ───────────────────────────────────────────
   if (
@@ -89,7 +97,7 @@ function computeDelta(
     delta.stamina = 8;
     delta.hp = 2;
     events.push("PLAYER_RESTED");
-    return { delta, events, npcStateUpdates };
+    return { delta, events, npcStateUpdates, combatNarrationHints };
   }
 
   // ── CONSUMABLE USE ────────────────────────────────────────────
@@ -101,7 +109,7 @@ function computeDelta(
     events.push("ITEM_USED");
     // Actual item consumption handled in main flow — flag here for routing
     delta.hp = 12;
-    return { delta, events, npcStateUpdates };
+    return { delta, events, npcStateUpdates, combatNarrationHints };
   }
 
   // ── STAMINA COSTS ─────────────────────────────────────────────
@@ -119,16 +127,17 @@ function computeDelta(
     events.push("SKILL_CHECK");
   }
 
-  // Roll outcomes
+  // ── ROLL OUTCOMES ─────────────────────────────────────────────
   if (roll) {
     const isAttack = /attack|strike|stab|slash|backstab|punch|kick/.test(lower);
     if (isAttack && delta.stamina === undefined) {
       delta.stamina = -3;
     }
+
     if (roll.tier === "CRITICAL_SUCCESS") {
       delta.xp = 30;
       if (/attack|strike|stab|slash|backstab/.test(lower)) {
-        // Deal damage to hostile NPC
+        // Deal damage to hostile NPC — no counter on critical success
         const targetNpc = findTargetNpc(lower, npcsInScene);
         if (targetNpc) {
           const npcId = targetNpc.id as string;
@@ -147,6 +156,7 @@ function computeDelta(
     } else if (roll.tier === "FULL_SUCCESS") {
       delta.xp = 20;
       if (/attack|strike|stab|slash/.test(lower)) {
+        // Deal damage to hostile NPC — no counter on full success
         const targetNpc = findTargetNpc(lower, npcsInScene);
         if (targetNpc) {
           const npcId = targetNpc.id as string;
@@ -163,9 +173,9 @@ function computeDelta(
       }
       if (/pick lock|search|examine/.test(lower)) events.push("QUEST_UPDATED");
     } else if (roll.tier === "PARTIAL_SUCCESS") {
-      delta.hp = -4;
       delta.xp = 10;
       if (/attack|strike|stab/.test(lower)) {
+        // Player deals reduced damage to NPC
         const targetNpc = findTargetNpc(lower, npcsInScene);
         if (targetNpc) {
           const npcId = targetNpc.id as string;
@@ -179,21 +189,69 @@ function computeDelta(
           };
           if (newHp <= 0) events.push("NPC_DEFEATED");
         }
+        // NPC counter-attacks on partial success
+        const hostileNpc = npcsInScene.find(
+          (n) =>
+            n.is_hostile === true &&
+            !(npcStates[n.id as string] as Record<string, unknown>)?.is_dead,
+        );
+        if (hostileNpc) {
+          const counterDamage = getNpcCounterDamage(hostileNpc);
+          delta.hp = -counterDamage;
+          events.push("NPC_COUNTER_ATTACKED");
+          combatNarrationHints.push(
+            `NPC_COUNTER_ATTACK:${hostileNpc.name} strikes back for ${counterDamage} damage.`,
+          );
+        }
+      } else {
+        // Non-attack partial success — minor setback, no counter
+        delta.hp = -3;
       }
     } else if (roll.tier === "FAILURE") {
-      delta.hp = -5;
       delta.xp = 5;
+      // NPC counter-attacks on failure — heavier damage
+      const hostileNpc = npcsInScene.find(
+        (n) =>
+          n.is_hostile === true &&
+          !(npcStates[n.id as string] as Record<string, unknown>)?.is_dead,
+      );
+      if (hostileNpc) {
+        const counterDamage = Math.round(getNpcCounterDamage(hostileNpc) * 1.5);
+        delta.hp = -counterDamage;
+        events.push("NPC_COUNTER_ATTACKED");
+        combatNarrationHints.push(
+          `NPC_COUNTER_ATTACK:${hostileNpc.name} counter-attacks for ${counterDamage} damage.`,
+        );
+      } else {
+        delta.hp = -5;
+      }
     } else if (roll.tier === "CRITICAL_FAILURE") {
-      delta.hp = -10;
       delta.xp = 5;
       events.push("PLAYER_INJURED");
+      // NPC deals devastating counter damage on critical failure
+      const hostileNpc = npcsInScene.find(
+        (n) =>
+          n.is_hostile === true &&
+          !(npcStates[n.id as string] as Record<string, unknown>)?.is_dead,
+      );
+      if (hostileNpc) {
+        const counterDamage = getNpcCounterDamage(hostileNpc) * 2;
+        delta.hp = -counterDamage;
+        events.push("NPC_COUNTER_ATTACKED");
+        combatNarrationHints.push(
+          `NPC_COUNTER_ATTACK:${hostileNpc.name} lands a devastating blow for ${counterDamage} damage.`,
+        );
+      } else {
+        delta.hp = -10;
+      }
     }
   }
 
-  return { delta, events, npcStateUpdates };
+  return { delta, events, npcStateUpdates, combatNarrationHints };
 }
 
-// Find which NPC the player is targeting based on action text
+// ── FIND TARGET NPC ───────────────────────────────────────────────
+// Find which NPC the player is targeting based on action text.
 function findTargetNpc(
   action: string,
   npcsInScene: Record<string, unknown>[],
@@ -208,7 +266,8 @@ function findTargetNpc(
   return hostile ?? null;
 }
 
-// Get current NPC HP from npc_states (tracks damage across turns)
+// ── GET NPC HP ────────────────────────────────────────────────────
+// Get current NPC HP from npc_states (tracks damage across turns).
 function getNpcHp(
   npcId: string,
   npc: Record<string, unknown>,
@@ -276,7 +335,7 @@ function computeRelationshipDelta(
   };
 }
 
-// Check if a relationship score crosses a tier threshold
+// ── RELATIONSHIP TIER ─────────────────────────────────────────────
 function getRelationshipTier(score: number): string {
   if (score <= -51) return "Hostile";
   if (score <= -11) return "Distrustful";
@@ -339,6 +398,7 @@ async function checkStoryBeats(
       );
       if (hasItem) triggered = true;
     }
+
     if (triggered) {
       fired.push(beat.id);
       const consequences = beat.consequences as Record<string, unknown>;
@@ -499,8 +559,13 @@ function buildNarrationContext(
     const sceneTransitions = narrationHints.filter((h) =>
       h.startsWith("SCENE_TRANSITION:")
     );
-    const otherHints = narrationHints.filter((h) =>
-      !h.startsWith("SCENE_TRANSITION:")
+    const counterAttacks = narrationHints.filter((h) =>
+      h.startsWith("NPC_COUNTER_ATTACK:")
+    );
+    const storyHints = narrationHints.filter(
+      (h) =>
+        !h.startsWith("SCENE_TRANSITION:") &&
+        !h.startsWith("NPC_COUNTER_ATTACK:"),
     );
 
     if (sceneTransitions.length > 0) {
@@ -511,9 +576,18 @@ function buildNarrationContext(
         `Narrate the transition dramatically — describe leaving the old location and arriving somewhere new.\n`;
     }
 
-    if (otherHints.length > 0) {
+    if (counterAttacks.length > 0) {
+      ctx += `\n=== NPC COUNTER-ATTACK ===\n`;
+      ctx += counterAttacks
+        .map((h) => h.replace("NPC_COUNTER_ATTACK:", ""))
+        .join("\n") + "\n";
+      ctx +=
+        `Narrate the NPC's counter-attack vividly — the player took this damage.\n`;
+    }
+
+    if (storyHints.length > 0) {
       ctx += `\n=== STORY BEAT TRIGGERED ===\n`;
-      ctx += otherHints.join("\n") + "\n";
+      ctx += storyHints.join("\n") + "\n";
     }
   }
 
@@ -670,7 +744,6 @@ serve(async (req: Request) => {
     }
 
     // ── 4. Roll if required ───────────────────────────────────────
-    // ── 4. Roll if required ───────────────────────────────────────
     let roll: RollResult | null = null;
     if (route_category === "ROLL_REQUIRED") {
       const skills = (state.skills as Record<string, number>) ?? {};
@@ -693,18 +766,20 @@ serve(async (req: Request) => {
       const dc = 14;
       roll = rollD20(modifier, dc);
     }
-    // ── 5. Compute consequences ───────────────────────────────────
+
     // ── 5. Compute consequences ───────────────────────────────────
     const npcStates = (campaignState?.npc_states as Record<string, unknown>) ??
       {};
     const characterSkills = (state.skills as Record<string, number>) ?? {};
-    const { delta, events, npcStateUpdates } = computeDelta(
-      player_action,
-      roll,
-      npcsInScene,
-      npcStates,
-      characterSkills,
-    );
+    const { delta, events, npcStateUpdates, combatNarrationHints } =
+      computeDelta(
+        player_action,
+        roll,
+        npcsInScene,
+        npcStates,
+        characterSkills,
+      );
+
     // ── 6. Apply delta to canonical state ─────────────────────────
     const updatedState: Record<string, number> = {};
     if (delta.hp !== undefined) {
@@ -841,21 +916,25 @@ serve(async (req: Request) => {
     if (updateError) throw updateError;
 
     // ── 8. Check story beats ──────────────────────────────────────
-    const { fired: beatsFired, narrationHints } = await checkStoryBeats(
-      supabase,
-      user_id,
-      state.campaign_id,
-      events,
-      { ...state, ...updatedState },
-      {
-        ...(campaignState || {}),
-        npc_states: mergedNpcStates,
-      },
-    );
+    const { fired: beatsFired, narrationHints: beatNarrationHints } =
+      await checkStoryBeats(
+        supabase,
+        user_id,
+        state.campaign_id,
+        events,
+        { ...state, ...updatedState },
+        {
+          ...(campaignState || {}),
+          npc_states: mergedNpcStates,
+        },
+      );
 
     if (beatsFired.length > 0) {
       events.push(...beatsFired.map((id) => `STORY_BEAT:${id}`));
     }
+
+    // Merge story beat hints with combat counter-attack hints
+    const narrationHints = [...beatNarrationHints, ...combatNarrationHints];
 
     // ── 8b. Evaluate summary trigger ─────────────────────────────
     const turnsSinceSummary = (state.turns_since_last_summary as number) ?? 0;
@@ -884,7 +963,8 @@ serve(async (req: Request) => {
 
     // ── 9. Commit revision ────────────────────────────────────────
     const revision_id = generateRevisionId();
-    const autosave_candidate = events.some((e) => e.startsWith("STORY_BEAT")) ||
+    const autosave_candidate =
+      events.some((e) => e.startsWith("STORY_BEAT")) ||
       events.includes("QUEST_UPDATED") ||
       events.includes("COMBAT_TURN_RESOLVED") ||
       events.includes("PLAYER_INJURED");
@@ -912,6 +992,7 @@ serve(async (req: Request) => {
       });
 
     if (revError) throw revError;
+
     // ── 10. Insert canonical events ───────────────────────────────
     if (events.length > 0) {
       await supabase.from("canonical_events").insert(
