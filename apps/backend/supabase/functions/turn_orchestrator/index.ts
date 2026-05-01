@@ -22,6 +22,7 @@ interface TurnRequest {
   resolved_route?: string;
   content_settings: {
     violence: boolean;
+    graphic: boolean;
     horror: boolean;
     romance: boolean;
     mature: boolean;
@@ -85,11 +86,11 @@ function runSafetyGateway(
     };
   }
 
-  if (contentSettings.violence && /gore|brutal|visceral|graphic/.test(lower)) {
+  if (contentSettings.violence && !contentSettings.graphic && /gore|brutal|visceral|graphic/.test(lower)) {
     return {
       decision: "ALLOW_WITH_CONSTRAINTS",
       sanitized_input: input,
-      policy_flags: ["VIOLENCE_LIMITED"],
+      policy_flags: ["GRAPHIC_DISABLED"],
       narration_constraints: ["NO_GORE"],
     };
   }
@@ -133,8 +134,8 @@ function runDeterministicRouter(input: string): RouteCategory {
       .test(lower)
   ) return "NO_ROLL_DETERMINISTIC";
   if (
-    /\b(attack|strike|stab|shoot|cast|throw|charge|backstab|ambush|slash|punch|kick)\b/
-      .test(lower)
+    /\b(attack|strike|stab|shoot|cast|throw|charge|backstab|ambush|slash|punch|kick|torture|mutilate|dismember|interrogate)\b/
+    .test(lower)
   ) return "ROLL_REQUIRED";
   if (/\b(sneak|hide|shadow|disappear|cloak|blend in)\b/.test(lower)) {
     return "ROLL_REQUIRED";
@@ -382,6 +383,7 @@ serve(async (req: Request) => {
       npc_states: simResult.npc_states,
       npcs_in_scene: simResult.npcs_in_scene,
       summary_job_queued: simResult.summary_job_queued,
+      narration_constraints: gateway.narration_constraints,
     });
   } catch (err) {
     console.error("turn_orchestrator error:", err);

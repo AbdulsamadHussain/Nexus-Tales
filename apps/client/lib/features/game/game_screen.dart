@@ -118,7 +118,9 @@ class _GameScreenState extends ConsumerState<GameScreen> {
         setState(() {
           _log.add({
             'type': 'system',
-            'text': data['player_message'] as String? ?? 'That action is not allowed.',
+            'text':
+                data['player_message'] as String? ??
+                'That action is not allowed.',
           });
         });
         _scrollToBottom();
@@ -130,7 +132,8 @@ class _GameScreenState extends ConsumerState<GameScreen> {
         setState(() {
           _log.add({
             'type': 'system',
-            'text': data['player_message'] as String? ??
+            'text':
+                data['player_message'] as String? ??
                 'Your intent remains unclear. Try a different approach.',
           });
         });
@@ -152,7 +155,8 @@ class _GameScreenState extends ConsumerState<GameScreen> {
           setState(() {
             _log.add({
               'type': 'clarification',
-              'text': 'What do you do? Describe your action — attack, search, move, speak, or use an item.',
+              'text':
+                  'What do you do? Describe your action — attack, search, move, speak, or use an item.',
             });
           });
           _scrollToBottom();
@@ -199,7 +203,8 @@ class _GameScreenState extends ConsumerState<GameScreen> {
         _log.add({'type': 'narrator', 'text': narration});
         _log.add({
           'type': 'system',
-          'text': '${data['revision_id']} · ${data['success_tier']} · ${data['route_category']}',
+          'text':
+              '${data['revision_id']} · ${data['success_tier']} · ${data['route_category']}',
         });
       });
     } catch (e) {
@@ -212,8 +217,15 @@ class _GameScreenState extends ConsumerState<GameScreen> {
     }
   }
 
-  Future<String> _callOllama(String context, String tier) async {
+  Future<String> _callOllama(
+    String context,
+    String tier, {
+    List<String> constraints = const [],
+  }) async {
     try {
+      final constraintText = constraints.isNotEmpty
+          ? ' Content restrictions: ${constraints.join(", ")}. Obey these strictly.'
+          : '';
       final uri = Uri.parse('http://localhost:11434/api/generate');
       final httpResponse = await http
           .post(
@@ -225,7 +237,8 @@ class _GameScreenState extends ConsumerState<GameScreen> {
                   'You are a dark fantasy game master narrator. '
                   'Respond ONLY with vivid narrative prose. '
                   'No thinking. No reasoning. No tags. No preamble. '
-                  '2-4 sentences maximum. Second person present tense.',
+                  '2-4 sentences maximum. Second person present tense.$constraintText',
+
               'prompt': context,
               'stream': false,
               'think': false,
@@ -734,7 +747,9 @@ Input: "the cabinet I need what is inside" → {"route": "ROLL_REQUIRED", "actio
       if (route == null || !actionableRoutes.contains(route)) return null;
 
       debugPrint('=== PARSER ASSIST ===');
-      debugPrint('Input: $input → route: $route, action: ${parsed['action_type']}');
+      debugPrint(
+        'Input: $input → route: $route, action: ${parsed['action_type']}',
+      );
       debugPrint('=== END ===');
 
       return {
@@ -770,7 +785,9 @@ Input: "the cabinet I need what is inside" → {"route": "ROLL_REQUIRED", "actio
         setState(() {
           _log.add({
             'type': 'system',
-            'text': data['player_message'] as String? ?? 'That action is not allowed.',
+            'text':
+                data['player_message'] as String? ??
+                'That action is not allowed.',
           });
         });
         _scrollToBottom();
@@ -781,7 +798,8 @@ Input: "the cabinet I need what is inside" → {"route": "ROLL_REQUIRED", "actio
         setState(() {
           _log.add({
             'type': 'system',
-            'text': data['player_message'] as String? ??
+            'text':
+                data['player_message'] as String? ??
                 'Your intent remains unclear. Try a different approach.',
           });
         });
@@ -828,16 +846,23 @@ Input: "the cabinet I need what is inside" → {"route": "ROLL_REQUIRED", "actio
         _scrollToBottom();
       }
 
+      final rawConstraints = data['narration_constraints'];
+      final constraints = rawConstraints is List
+          ? rawConstraints.map((e) => e.toString()).toList()
+          : <String>[];
+
       final narration = await _callOllama(
         data['narration_context'] as String? ?? '',
         data['success_tier'] as String? ?? 'NO_ROLL',
+        constraints: constraints,
       );
 
       setState(() {
         _log.add({'type': 'narrator', 'text': narration});
         _log.add({
           'type': 'system',
-          'text': '${data['revision_id']} · ${data['success_tier']} · ${data['route_category']} · parser_assisted',
+          'text':
+              '${data['revision_id']} · ${data['success_tier']} · ${data['route_category']} · parser_assisted',
         });
       });
       _scrollToBottom();
@@ -853,7 +878,9 @@ Input: "the cabinet I need what is inside" → {"route": "ROLL_REQUIRED", "actio
     Map<String, dynamic> data,
     String action,
   ) async {
-    debugPrint('Summary check: summary_job_queued = ${data['summary_job_queued']}');
+    debugPrint(
+      'Summary check: summary_job_queued = ${data['summary_job_queued']}',
+    );
     if (data['summary_job_queued'] != true) return;
 
     try {
@@ -869,7 +896,9 @@ Input: "the cabinet I need what is inside" → {"route": "ROLL_REQUIRED", "actio
           'ollama_url': 'http://localhost:11434',
         },
       );
-      debugPrint('Summary worker triggered for revision ${data['revision_id']}');
+      debugPrint(
+        'Summary worker triggered for revision ${data['revision_id']}',
+      );
     } catch (e) {
       debugPrint('Summary worker failed (non-blocking): $e');
     }
@@ -883,6 +912,12 @@ Input: "the cabinet I need what is inside" → {"route": "ROLL_REQUIRED", "actio
         return jsonDecode(raw) as Map<String, dynamic>;
       } catch (_) {}
     }
-    return {'violence': true, 'horror': true, 'romance': true, 'mature': false};
+    return {
+      'violence': true,
+      'graphic': false,
+      'horror': true,
+      'romance': true,
+      'mature': false,
+    };
   }
 }

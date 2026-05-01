@@ -7,13 +7,13 @@ class CharacterSheetPanel extends StatefulWidget {
   final VoidCallback? onSettingChanged;
   final Map<String, dynamic> contentSettings;
 
-const CharacterSheetPanel({
-  super.key,
-  required this.canonicalState,
-  required this.contentSettings,
-  required this.onClose,
-  this.onSettingChanged,
-});
+  const CharacterSheetPanel({
+    super.key,
+    required this.canonicalState,
+    required this.contentSettings,
+    required this.onClose,
+    this.onSettingChanged,
+  });
 
   @override
   State<CharacterSheetPanel> createState() => _CharacterSheetPanelState();
@@ -250,17 +250,13 @@ class _CharacterSheetPanelState extends State<CharacterSheetPanel>
     );
   }
 
-List<Widget> _buildContentSettings(Map<String, dynamic> settings) {
-    final labels = {
-      'violence': 'Violence',
-      'horror': 'Horror',
-      'romance': 'Romance',
-      'mature': 'Mature themes',
-    };
-    return labels.entries.map((e) {
-      final on = settings[e.key] as bool? ?? false;
+  List<Widget> _buildContentSettings(Map<String, dynamic> settings) {
+    final violenceOn = settings['violence'] as bool? ?? false;
+
+    Widget settingRow(String key, String label, {double leftPad = 0}) {
+      final on = settings[key] as bool? ?? false;
       return Padding(
-        padding: const EdgeInsets.only(bottom: 5),
+        padding: EdgeInsets.only(bottom: 5, left: leftPad),
         child: Row(
           children: [
             Container(
@@ -273,12 +269,12 @@ List<Widget> _buildContentSettings(Map<String, dynamic> settings) {
             ),
             const SizedBox(width: 8),
             Text(
-              e.value,
+              label,
               style: const TextStyle(color: Color(0xFF8898B0), fontSize: 12),
             ),
             const Spacer(),
             GestureDetector(
-              onTap: () => _toggleContentSetting(e.key, !on, settings),
+              onTap: () => _toggleContentSetting(key, !on, settings),
               child: Container(
                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                 decoration: BoxDecoration(
@@ -307,10 +303,18 @@ List<Widget> _buildContentSettings(Map<String, dynamic> settings) {
           ],
         ),
       );
-    }).toList();
+    }
+
+    return [
+      settingRow('violence', 'Violence'),
+      if (violenceOn) settingRow('graphic', 'Graphic', leftPad: 16),
+      settingRow('horror', 'Horror'),
+      settingRow('romance', 'Romance'),
+      settingRow('mature', 'Mature themes'),
+    ];
   }
 
-Future<void> _toggleContentSetting(
+  Future<void> _toggleContentSetting(
     String key,
     bool newValue,
     Map<String, dynamic> currentSettings,
