@@ -53,21 +53,29 @@ serve(async (req: Request) => {
 
     // Create canonical state
     const { error: insertError } = await serviceClient
-      .from("canonical_state")
-      .insert({
-        user_id: user.id,
-        character_name: body.character_name,
-        character_class: body.character_class,
-        origin: body.origin,
-        hp: body.hp_max,
-        hp_max: body.hp_max,
-        mp: body.mp_max,
-        mp_max: body.mp_max,
-        stamina: body.stamina_max,
-        stamina_max: body.stamina_max,
-        current_location: "vault_of_the_plague_warden",
-        campaign_id: "campaign_01",
-      });
+          .from("canonical_state")
+          .insert({
+            user_id: user.id,
+            character_name: body.character_name,
+            character_class: body.character_class,
+            origin: body.origin,
+            hp: body.hp_max,
+            hp_max: body.hp_max,
+            mp: body.mp_max,
+            mp_max: body.mp_max,
+            stamina: body.stamina_max,
+            stamina_max: body.stamina_max,
+            current_location: "vault_of_the_plague_warden",
+            campaign_id: "campaign_01",
+            skills: body.skills ?? {},
+            inventory: body.starting_items ?? [],
+            content_settings: {
+              violence: true,
+              horror: true,
+              romance: false,
+              mature: false,
+            },
+          });
 
     if (insertError) throw insertError;
 
