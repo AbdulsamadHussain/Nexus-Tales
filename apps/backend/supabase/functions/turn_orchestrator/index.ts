@@ -20,6 +20,8 @@ interface TurnRequest {
   player_action: string;
   previous_revision_id: string | null;
   resolved_route?: string;
+  resolved_action_type?: string;
+  candidate_skill?: string;
   content_settings: {
     violence: boolean;
     graphic: boolean;
@@ -105,64 +107,75 @@ function runSafetyGateway(
 
 // ── Deterministic Router ──────────────────────────────────────────
 
-function runDeterministicRouter(input: string): RouteCategory {
+function runDeterministicRouter(input: string): { route: RouteCategory; actionType: string; candidateSkill?: string } {
   const lower = input.trim().toLowerCase();
 
   if (/\b(inventory|codex|map|quest log|settings|save|load)\b/.test(lower)) {
-    return "UI_ACTION";
+    return { route: "UI_ACTION", actionType: "UI_ACTION" };
   }
-  if (lower.length < 4) return "CLARIFICATION_REQUIRED";
+  if (lower.length < 4) return { route: "CLARIFICATION_REQUIRED", actionType: "OTHER" };
   if (
     /^(hi|hello|hey|sup|yo|hi there|good morning|good evening)[\s!?.]*$/.test(
       lower,
     )
-  ) return "CLARIFICATION_REQUIRED";
+  ) return { route: "CLARIFICATION_REQUIRED", actionType: "OTHER" };
   if (
     /what (model|ai|llm|version)|who are you|are you (an ai|a bot|gpt|claude|gemma)/
       .test(lower)
-  ) return "CLARIFICATION_REQUIRED";
+  ) return { route: "CLARIFICATION_REQUIRED", actionType: "OTHER" };
 
   if (
     /\b(read|look at|examine|check|open unlocked|buy|purchase|talk to|speak to|ask about)\b/
       .test(lower) &&
     !/attack|fight|sneak|steal|pick lock|persuade|intimidate|cast|jump|climb/
       .test(lower)
-  ) return "NO_ROLL_DETERMINISTIC";
+  ) {
+    if (/\b(talk to|speak to|ask about)\b/.test(lower)) return { route: "NO_ROLL_DETERMINISTIC", actionType: "SPEAK" };
+    return { route: "NO_ROLL_DETERMINISTIC", actionType: "EXAMINE" };
+  }
 
   if (
     /\b(go to|walk to|move to|head to|enter|leave|go north|go south|go east|go west)\b/
       .test(lower)
-  ) return "NO_ROLL_DETERMINISTIC";
+  ) return { route: "NO_ROLL_DETERMINISTIC", actionType: "MOVE" };
+  
   if (
     /\b(attack|strike|stab|shoot|cast|throw|charge|backstab|ambush|slash|punch|kick|torture|mutilate|dismember|interrogate)\b/
     .test(lower)
-  ) return "ROLL_REQUIRED";
+  ) return { route: "ROLL_REQUIRED", actionType: "ATTACK", candidateSkill: "melee" };
+  
   if (/\b(sneak|hide|shadow|disappear|cloak|blend in)\b/.test(lower)) {
-    return "ROLL_REQUIRED";
+    return { route: "ROLL_REQUIRED", actionType: "STEALTH", candidateSkill: "stealth" };
   }
+  
+  if (/\b(pick lock|lockpick)\b/.test(lower)) return { route: "ROLL_REQUIRED", actionType: "SKILL_CHECK", candidateSkill: "lockpick" };
+  if (/\b(persuade|intimidate|deceive|bluff)\b/.test(lower)) return { route: "ROLL_REQUIRED", actionType: "SKILL_CHECK", candidateSkill: "persuasion" };
+  if (/\b(search|investigate)\b/.test(lower)) return { route: "ROLL_REQUIRED", actionType: "SKILL_CHECK", candidateSkill: "perception" };
   if (
-    /\b(pick lock|lockpick|persuade|intimidate|deceive|bluff|steal|pickpocket|climb|jump|escape|search|investigate|disarm|hack)\b/
+    /\b(steal|pickpocket|climb|jump|escape|disarm|hack)\b/
       .test(lower)
-  ) return "ROLL_REQUIRED";
+  ) return { route: "ROLL_REQUIRED", actionType: "SKILL_CHECK" };
+  
   if (/\b(retreat|flee|run away|back away|exit)\b/.test(lower)) {
-    return "NO_ROLL_DETERMINISTIC";
+    return { route: "NO_ROLL_DETERMINISTIC", actionType: "MOVE" };
   }
 
   if (
     /\b(rest|sit|breathe|recover|catch my breath|take a moment|take a break|meditate|sleep|wait)\b/
       .test(lower)
-  ) return "NO_ROLL_DETERMINISTIC";
+  ) return { route: "NO_ROLL_DETERMINISTIC", actionType: "REST" };
+  
   if (
     /\b(use|drink|apply|consume)\b.*(salve|potion|vial|healing|remedy|bandage)/
       .test(lower) || /\b(healing salve|health potion)\b/.test(lower)
-  ) return "NO_ROLL_DETERMINISTIC";
+  ) return { route: "NO_ROLL_DETERMINISTIC", actionType: "USE_ITEM" };
 
   if (
     /\b(i |my |we )(try|attempt|grab|take|use|open|push|pull|lift|break|destroy|throw|place|drop|equip|unequip)\b/
       .test(lower)
-  ) return "ROLL_REQUIRED";
+  ) return { route: "ROLL_REQUIRED", actionType: "SKILL_CHECK" };
 
-  return "CLARIFICATION_REQUIRED";
+  return { route: "CLARIFICATION_REQUIRED", actionType: "OTHER" };
 }
 
 // ── Ambiguity counter helpers (§6.3) ─────────────────────────────
@@ -268,11 +281,32 @@ serve(async (req: Request) => {
       "UI_ACTION",
       "SYSTEM_TRANSFORMED_ACTION",
     ];
+    
+    // §6.2 Validation: Enforce strict schema on parsed route and action_type
+    const validActionTypes = ["SPEAK", "EXAMINE", "MOVE", "USE_ITEM", "ATTACK", "STEALTH", "SKILL_CHECK", "OTHER", "REST"];
+    
+    let routeCategory: RouteCategory;
+    let actionType: string;
+    let candidateSkill: string | undefined = body.candidate_skill;
+
     const resolvedRoute = body.resolved_route;
-    const routeCategory: RouteCategory =
-      (resolvedRoute && validRoutes.includes(resolvedRoute))
-        ? resolvedRoute as RouteCategory
-        : runDeterministicRouter(gateway.sanitized_input);
+    const resolvedActionType = body.resolved_action_type;
+
+    if (resolvedRoute && validRoutes.includes(resolvedRoute)) {
+      if (resolvedActionType && validActionTypes.includes(resolvedActionType)) {
+        routeCategory = resolvedRoute as RouteCategory;
+        actionType = resolvedActionType;
+      } else {
+        // §6.2 Unknown semantic field -> reject entire parser output
+        routeCategory = "CLARIFICATION_REQUIRED";
+        actionType = "OTHER";
+      }
+    } else {
+      const routerResult = runDeterministicRouter(gateway.sanitized_input);
+      routeCategory = routerResult.route;
+      actionType = routerResult.actionType;
+      candidateSkill = routerResult.candidateSkill;
+    }
 
     if (routeCategory === "UI_ACTION") {
       return jsonResponse({
@@ -350,6 +384,8 @@ serve(async (req: Request) => {
       user_id,
       player_action: gateway.sanitized_input,
       route_category: routeCategory,
+      action_type: actionType,
+      candidate_skill: candidateSkill,
       gateway_decision: gateway.decision,
       narration_constraints: gateway.narration_constraints,
       previous_revision_id,

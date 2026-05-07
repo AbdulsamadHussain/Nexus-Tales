@@ -27,6 +27,8 @@ interface ActionPacket {
   user_id: string;
   player_action: string;
   route_category: RouteCategory;
+  action_type?: string;
+  candidate_skill?: string;
   gateway_decision: GatewayDecision;
   narration_constraints: string[];
   previous_revision_id: string | null;
@@ -73,6 +75,7 @@ function getNpcCounterDamage(npc: Record<string, unknown>): number {
 
 function computeDelta(
   action: string,
+  actionType: string | undefined,
   roll: RollResult | null,
   npcsInScene: Record<string, unknown>[],
   npcStates: Record<string, unknown>,
@@ -89,11 +92,14 @@ function computeDelta(
   const npcStateUpdates: Record<string, unknown> = {};
   const combatNarrationHints: string[] = [];
 
+  const isRest = actionType === "REST" || /\b(rest|sit|breathe|recover|catch my breath|take a moment|take a break|meditate|sleep|wait)\b/.test(lower);
+  const isUseItem = actionType === "USE_ITEM" || /\b(use|drink|apply|consume)\b.*(salve|potion|vial|healing|remedy|bandage)/.test(lower) || /\b(healing salve|health potion)\b/.test(lower);
+  const isAttack = actionType === "ATTACK" || /attack|strike|stab|charge|backstab|slash|punch|kick/.test(lower);
+  const isStealth = actionType === "STEALTH" || /sneak|hide|shadow/.test(lower);
+  const isSkillCheck = actionType === "SKILL_CHECK" || /pick lock|lockpick|search|examine|investigate/.test(lower);
+
   // ── REST / RECOVERY ───────────────────────────────────────────
-  if (
-    /\b(rest|sit|breathe|recover|catch my breath|take a moment|take a break|meditate|sleep|wait)\b/
-      .test(lower)
-  ) {
+  if (isRest) {
     delta.stamina = 8;
     delta.hp = 2;
     events.push("PLAYER_RESTED");
@@ -101,11 +107,7 @@ function computeDelta(
   }
 
   // ── CONSUMABLE USE ────────────────────────────────────────────
-  if (
-    /\b(use|drink|apply|consume)\b.*(salve|potion|vial|healing|remedy|bandage)/
-      .test(lower) ||
-    /\b(healing salve|health potion)\b/.test(lower)
-  ) {
+  if (isUseItem) {
     events.push("ITEM_USED");
     // Actual item consumption handled in main flow — flag here for routing
     delta.hp = 12;
@@ -113,30 +115,26 @@ function computeDelta(
   }
 
   // ── STAMINA COSTS ─────────────────────────────────────────────
-  if (/attack|strike|stab|charge|backstab|slash|punch|kick/.test(lower)) {
+  if (isAttack) {
     delta.stamina = -3;
     events.push("COMBAT_TURN_RESOLVED");
-  } else if (/sneak|hide|shadow/.test(lower)) {
+  } else if (isStealth) {
     delta.stamina = -2;
     events.push("STEALTH_ATTEMPTED");
-  } else if (/pick lock|lockpick/.test(lower)) {
-    delta.stamina = -1;
-    events.push("SKILL_CHECK");
-  } else if (/search|examine|investigate/.test(lower)) {
+  } else if (isSkillCheck) {
     delta.stamina = -1;
     events.push("SKILL_CHECK");
   }
 
   // ── ROLL OUTCOMES ─────────────────────────────────────────────
   if (roll) {
-    const isAttack = /attack|strike|stab|slash|backstab|punch|kick/.test(lower);
     if (isAttack && delta.stamina === undefined) {
       delta.stamina = -3;
     }
 
     if (roll.tier === "CRITICAL_SUCCESS") {
       delta.xp = 30;
-      if (/attack|strike|stab|slash|backstab/.test(lower)) {
+      if (isAttack) {
         // Deal damage to hostile NPC — no counter on critical success
         const targetNpc = findTargetNpc(lower, npcsInScene);
         if (targetNpc) {
@@ -155,7 +153,7 @@ function computeDelta(
       }
     } else if (roll.tier === "FULL_SUCCESS") {
       delta.xp = 20;
-      if (/attack|strike|stab|slash/.test(lower)) {
+      if (isAttack) {
         // Deal damage to hostile NPC — no counter on full success
         const targetNpc = findTargetNpc(lower, npcsInScene);
         if (targetNpc) {
@@ -171,10 +169,10 @@ function computeDelta(
           if (newHp <= 0) events.push("NPC_DEFEATED");
         }
       }
-      if (/pick lock|search|examine/.test(lower)) events.push("QUEST_UPDATED");
+      if (isSkillCheck && /pick lock|search|examine/.test(lower)) events.push("QUEST_UPDATED");
     } else if (roll.tier === "PARTIAL_SUCCESS") {
       delta.xp = 10;
-      if (/attack|strike|stab/.test(lower)) {
+      if (isAttack) {
         // Player deals reduced damage to NPC
         const targetNpc = findTargetNpc(lower, npcsInScene);
         if (targetNpc) {
@@ -751,6 +749,8 @@ serve(async (req: Request) => {
       user_id,
       player_action,
       route_category,
+      action_type,
+      candidate_skill,
       gateway_decision,
       previous_revision_id,
     } = packet;
@@ -833,31 +833,33 @@ serve(async (req: Request) => {
       const skills = (state.skills as Record<string, number>) ?? {};
       const lower = player_action.toLowerCase();
 
-      // Pick the most relevant skill for this action
       let modifier = 3; // base
-      if (/attack|strike|stab|slash|backstab/.test(lower)) {
-        modifier = skills.dagger ?? skills.melee ?? skills.strength ?? 3;
-      } else if (/sneak|hide|shadow/.test(lower)) {
-        modifier = skills.stealth ?? 3;
-      } else if (/pick lock|lockpick/.test(lower)) {
-        modifier = skills.lockpick ?? 3;
-      } else if (/persuade|intimidate|deceive|bluff/.test(lower)) {
-        modifier = skills.persuasion ?? skills.intimidate ?? 3;
-      } else if (/search|investigate/.test(lower)) {
-        modifier = skills.perception ?? 3;
+      if (candidate_skill && skills[candidate_skill] !== undefined) {
+        modifier = skills[candidate_skill];
+      } else {
+        if (action_type === "ATTACK" || /attack|strike|stab|slash|backstab/.test(lower)) {
+          modifier = skills.dagger ?? skills.melee ?? skills.strength ?? 3;
+        } else if (action_type === "STEALTH" || /sneak|hide|shadow/.test(lower)) {
+          modifier = skills.stealth ?? 3;
+        } else if (action_type === "SKILL_CHECK") {
+          if (/pick lock|lockpick/.test(lower)) modifier = skills.lockpick ?? 3;
+          else if (/persuade|intimidate|deceive|bluff/.test(lower)) modifier = skills.persuasion ?? skills.intimidate ?? 3;
+          else if (/search|investigate/.test(lower)) modifier = skills.perception ?? 3;
+          else modifier = 3;
+        }
       }
 
       const dc = 14;
       roll = rollD20(modifier, dc);
     }
 
-    // ── 5. Compute consequences ───────────────────────────────────
     const npcStates = (campaignState?.npc_states as Record<string, unknown>) ??
       {};
     const characterSkills = (state.skills as Record<string, number>) ?? {};
     const { delta, events, npcStateUpdates, combatNarrationHints } =
       computeDelta(
         player_action,
+        action_type,
         roll,
         npcsInScene,
         npcStates,

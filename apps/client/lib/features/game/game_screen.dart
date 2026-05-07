@@ -149,7 +149,7 @@ class _GameScreenState extends ConsumerState<GameScreen> {
         final parsed = await _runParserAssist(action);
         if (parsed != null) {
           // Parser resolved to a real route — resubmit with it
-          await _submitWithRoute(action, parsed['route']!, user.id);
+          await _submitWithRoute(action, parsed['route']!, parsed['action_type']!, parsed['candidate_skill'], user.id);
         } else {
           // Parser couldn't resolve — show clarification bubble
           setState(() {
@@ -682,7 +682,7 @@ class _GameScreenState extends ConsumerState<GameScreen> {
   /// the input as a real actionable route. Returns null if unclear.
   /// CLARIFICATION_REQUIRED from the parser is treated as null —
   /// the orchestrator already counted this turn's ambiguity.
-  Future<Map<String, String>?> _runParserAssist(String input) async {
+  Future<Map<String, String?>?> _runParserAssist(String input) async {
     try {
       final prompt =
           '''You are a game action classifier for a dark fantasy RPG.
@@ -692,6 +692,8 @@ Player input: "$input"
 
 You MUST respond with exactly this structure:
 {"route": "NO_ROLL_DETERMINISTIC", "action_type": "SPEAK"}
+
+If the route is "ROLL_REQUIRED", you MUST also include a "candidate_skill" field (e.g., "melee", "stealth", "persuasion", "perception", "lockpick", "strength").
 
 The "route" field MUST be one of these exact strings only:
 - "NO_ROLL_DETERMINISTIC" (for speaking, examining, moving, using items)
@@ -708,7 +710,7 @@ Input: "my blade finds the gap" → {"route": "ROLL_REQUIRED", "action_type": "A
 Input: "maybe" → {"route": "CLARIFICATION_REQUIRED", "action_type": "OTHER"}
 Input: "hmm" → {"route": "CLARIFICATION_REQUIRED", "action_type": "OTHER"}
 Input: "what if" → {"route": "CLARIFICATION_REQUIRED", "action_type": "OTHER"}
-Input: "the cabinet I need what is inside" → {"route": "ROLL_REQUIRED", "action_type": "SKILL_CHECK"}''';
+Input: "the cabinet I need what is inside" → {"route": "ROLL_REQUIRED", "action_type": "SKILL_CHECK", "candidate_skill": "lockpick"}''';
 
       final uri = Uri.parse('http://localhost:11434/api/generate');
       final response = await http
@@ -747,6 +749,10 @@ Input: "the cabinet I need what is inside" → {"route": "ROLL_REQUIRED", "actio
       if (route == null || !actionableRoutes.contains(route)) return null;
 
       debugPrint('=== PARSER ASSIST ===');
+      debugPrint('route: ${parsed['route']}, action_type: ${parsed['action_type']}, skill: ${parsed['candidate_skill']}');
+      debugPrint('=== END ===');
+      
+      debugPrint('=== PARSER ASSIST ===');
       debugPrint(
         'Input: $input → route: $route, action: ${parsed['action_type']}',
       );
@@ -755,6 +761,7 @@ Input: "the cabinet I need what is inside" → {"route": "ROLL_REQUIRED", "actio
       return {
         'route': route,
         'action_type': parsed['action_type'] as String? ?? 'OTHER',
+        'candidate_skill': parsed['candidate_skill'] as String?,
       };
     } catch (e) {
       debugPrint('Parser assist error: $e');
@@ -765,6 +772,8 @@ Input: "the cabinet I need what is inside" → {"route": "ROLL_REQUIRED", "actio
   Future<void> _submitWithRoute(
     String action,
     String resolvedRoute,
+    String resolvedActionType,
+    String? candidateSkill,
     String userId,
   ) async {
     try {
@@ -775,6 +784,8 @@ Input: "the cabinet I need what is inside" → {"route": "ROLL_REQUIRED", "actio
           'player_action': action,
           'previous_revision_id': _lastRevisionId,
           'resolved_route': resolvedRoute,
+          'resolved_action_type': resolvedActionType,
+          if (candidateSkill != null) 'candidate_skill': candidateSkill,
           'content_settings': _getContentSettings(),
         },
       );
