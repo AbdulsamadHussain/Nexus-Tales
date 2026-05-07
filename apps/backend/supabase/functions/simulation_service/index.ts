@@ -534,8 +534,8 @@ function buildNarrationContext(
       const npcId = npc.id as string;
       const trackedState =
         (npcStateUpdates as Record<string, unknown>)[npcId] as
-          | Record<string, unknown>
-          | undefined;
+        | Record<string, unknown>
+        | undefined;
       const currentHp = trackedState?.hp ?? npc.hp_max ?? npc.hp;
       const isDead = trackedState?.is_dead ?? false;
       const status = isDead ? "DEFEATED" : `HP: ${currentHp}/${npc.hp_max}`;
@@ -647,6 +647,90 @@ async function evaluateSummaryTrigger(
 
   return { shouldQueue, isHard, newTurnCount, newCooldown };
 }
+
+// ── CODEX ──────────────────────────────────────────────────
+// Writes lore entries to known_lore on real discovery events.
+// Only writes entries the player doesn't already have (deduped by id).
+
+async function updateCodex(
+  supabase: ReturnType<typeof createClient>,
+  userId: string,
+  events: string[],
+  npcsInScene: Record<string, unknown>[],
+  scene: Record<string, unknown> | null,
+  currentKnownLore: unknown[],
+  revisionId: string,
+  npcStateUpdates: Record<string, unknown>,
+  roll: RollResult | null,
+  playerAction: string,
+): Promise<void> {
+  const existingIds = new Set(
+    (currentKnownLore as Record<string, unknown>[]).map((e) => e.id as string),
+  );
+  const newEntries: Record<string, unknown>[] = [];
+
+  // NPC first encounter
+  for (const npc of npcsInScene) {
+    const npcId = npc.id as string;
+    const isDead =
+      (npcStateUpdates[npcId] as Record<string, unknown>)?.is_dead ?? false;
+    if (!existingIds.has(npcId) && !isDead) {
+      newEntries.push({
+        id: npcId,
+        title: npc.name,
+        category: "NPC",
+        body: `${npc.description} ${npc.personality}`,
+        discovered_at: revisionId,
+      });
+      existingIds.add(npcId);
+    }
+  }
+
+  // Location first visit
+  if (scene) {
+    const sceneId = scene.id as string;
+    if (!existingIds.has(sceneId)) {
+      newEntries.push({
+        id: sceneId,
+        title: scene.title,
+        category: "LOCATION",
+        body: scene.description as string,
+        discovered_at: revisionId,
+      });
+      existingIds.add(sceneId);
+    }
+  }
+
+  // Successful search or investigate
+  const lower = playerAction.toLowerCase();
+  if (
+    /search|investigate|examine/.test(lower) &&
+    roll &&
+    (roll.tier === "FULL_SUCCESS" || roll.tier === "CRITICAL_SUCCESS")
+  ) {
+    const sceneId = scene ? scene.id as string : "unknown_area";
+    const loreId = `lore_search_${sceneId}`;
+    if (!existingIds.has(loreId)) {
+      newEntries.push({
+        id: loreId,
+        title: "Discovery",
+        category: "LORE",
+        body: `A successful search in ${scene?.title ?? "the area"} revealed hidden details.`,
+        discovered_at: revisionId,
+      });
+      existingIds.add(loreId);
+    }
+  }
+
+  if (newEntries.length === 0) return;
+
+  const updatedLore = [...(currentKnownLore as unknown[]), ...newEntries];
+  await supabase
+    .from("canonical_state")
+    .update({ known_lore: updatedLore })
+    .eq("user_id", userId);
+}
+
 
 // ── MAIN ─────────────────────────────────────────────────────────
 
@@ -908,12 +992,27 @@ serve(async (req: Request) => {
     }
 
     // ── 7. Write canonical state ──────────────────────────────────
+    const revision_id = generateRevisionId();
     const { error: updateError } = await supabase
       .from("canonical_state")
       .update({ ...updatedState, updated_at: new Date().toISOString() })
       .eq("user_id", user_id);
 
     if (updateError) throw updateError;
+
+    // ── 7b. Update codex on discovery events ─────────────────────
+    await updateCodex(
+      supabase,
+      user_id,
+      events,
+      npcsInScene,
+      scene,
+      (state.known_lore as unknown[]) ?? [],
+      revision_id,
+      npcStateUpdates,
+      roll,
+      player_action,
+    );
 
     // ── 8. Check story beats ──────────────────────────────────────
     const { fired: beatsFired, narrationHints: beatNarrationHints } =
@@ -962,7 +1061,6 @@ serve(async (req: Request) => {
       .eq("user_id", user_id);
 
     // ── 9. Commit revision ────────────────────────────────────────
-    const revision_id = generateRevisionId();
     const autosave_candidate =
       events.some((e) => e.startsWith("STORY_BEAT")) ||
       events.includes("QUEST_UPDATED") ||

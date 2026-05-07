@@ -27,7 +27,7 @@ class _CharacterSheetPanelState extends State<CharacterSheetPanel>
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 4, vsync: this);
+    _tabController = TabController(length: 5, vsync: this);
   }
 
   @override
@@ -59,6 +59,7 @@ class _CharacterSheetPanelState extends State<CharacterSheetPanel>
                 _buildInventoryTab(s),
                 _buildQuestsTab(s),
                 _buildRelationsTab(s),
+                _buildCodexTab(s),
               ],
             ),
           ),
@@ -215,6 +216,7 @@ class _CharacterSheetPanelState extends State<CharacterSheetPanel>
         Tab(text: 'INV'),
         Tab(text: 'QUESTS'),
         Tab(text: 'RELATIONS'),
+        Tab(text: 'CODEX'),
       ],
     );
   }
@@ -611,6 +613,84 @@ class _CharacterSheetPanelState extends State<CharacterSheetPanel>
           ),
         ],
       ),
+    );
+  }
+
+  // ── CODEX TAB ───────────────────────────────────────────────────
+
+  Widget _buildCodexTab(Map<String, dynamic> s) {
+    final knownLore = s['known_lore'] as List<dynamic>? ?? [];
+
+    if (knownLore.isEmpty) {
+      return Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: const [
+            Icon(Icons.book_outlined, color: Color(0xFF2D3A4A), size: 32),
+            SizedBox(height: 8),
+            Text(
+              'No lore discovered yet',
+              style: TextStyle(color: Color(0xFF4A5A72), fontSize: 12),
+            ),
+          ],
+        ),
+      );
+    }
+
+    return ListView.builder(
+      padding: const EdgeInsets.all(12),
+      itemCount: knownLore.length,
+      itemBuilder: (context, i) {
+        final entry = knownLore[i] as Map<String, dynamic>;
+        final title = entry['title'] as String? ?? 'Unknown';
+        final body = entry['body'] as String? ?? '';
+        final category = entry['category'] as String? ?? 'LORE';
+
+        return Container(
+          margin: const EdgeInsets.only(bottom: 8),
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: const Color(0xFF1A2230),
+            borderRadius: BorderRadius.circular(6),
+            border: Border.all(color: const Color(0xFF2D3A4A)),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Text(
+                    title,
+                    style: const TextStyle(
+                      color: Color(0xFFC9A84C),
+                      fontSize: 13,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                  Text(
+                    category,
+                    style: const TextStyle(
+                      color: Color(0xFF4A5A72),
+                      fontSize: 9,
+                      letterSpacing: 1,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 6),
+              Text(
+                body,
+                style: const TextStyle(
+                  color: Color(0xFF8898B0),
+                  fontSize: 11,
+                  height: 1.4,
+                ),
+              ),
+            ],
+          ),
+        );
+      },
     );
   }
 
