@@ -10,6 +10,27 @@ interface SummaryRequest {
   ollama_url?: string;
 }
 
+export function buildFallbackSummary(
+  events: string[],
+  characterName: string,
+  location: string,
+): string {
+  const notable = events
+    .filter((e) =>
+      e.startsWith("STORY_BEAT:") ||
+      e.startsWith("NPC_DEFEATED") ||
+      e.startsWith("QUEST_UPDATED") ||
+      e.startsWith("RELATIONSHIP_TIER_CHANGED:")
+    )
+    .map((e) =>
+      e
+        .replace("STORY_BEAT:", "Beat: ")
+        .replace("RELATIONSHIP_TIER_CHANGED:", "Relationship changed: ")
+    )
+    .join(". ");
+  return notable || `${characterName} continued exploring ${location}.`;
+}
+
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
     status,
@@ -20,7 +41,7 @@ function jsonResponse(body: unknown, status = 200): Response {
   });
 }
 
-serve(async (req: Request) => {
+if (import.meta.main) serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
     return new Response("ok", {
       headers: {
@@ -90,8 +111,8 @@ Write only the summary, 2-3 sentences maximum.`;
         if (ollamaResponse.ok) {
           const data = await ollamaResponse.json();
           const raw = (data.response as string ?? "").trim();
-          if (raw.includes("<tool_call>")) {
-            summaryText = raw.substring(raw.lastIndexOf("<tool_call>") + 8).trim();
+          if (raw.includes("</think>")) {
+            summaryText = raw.substring(raw.lastIndexOf("</think>") + 8).trim();
           } else {
             summaryText = raw;
           }
@@ -103,11 +124,11 @@ Write only the summary, 2-3 sentences maximum.`;
 
     // Fallback: deterministic event-log summary
     if (!summaryText) {
-      const eventSummary = events
-        .filter((e) => e.startsWith("STORY_BEAT:") || e.startsWith("NPC_DEFEATED") || e.startsWith("QUEST_UPDATED") || e.startsWith("RELATIONSHIP_TIER_CHANGED:"))
-        .map((e) => e.replace("STORY_BEAT:", "Beat: ").replace("RELATIONSHIP_TIER_CHANGED:", "Relationship changed: "))
-        .join(". ");
-      summaryText = eventSummary || `${state?.character_name} continued exploring ${state?.current_location}.`;
+      summaryText = buildFallbackSummary(
+        events,
+        state?.character_name ?? "The adventurer",
+        state?.current_location ?? "the area",
+      );
     }
 
     // ── Store summary ─────────────────────────────────────────────

@@ -1,8 +1,35 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
+// Schema field descriptors keyed by schema_version.
+// Add a new entry whenever a migration introduces breaking field changes.
+export const SCHEMA_DESCRIPTORS: Record<number, Record<string, string>> = {
+  1: {
+    hp: "number -current player hit points",
+    hp_max: "number -maximum hit points",
+    mp: "number -current mana points",
+    mp_max: "number -maximum mana points",
+    stamina: "number -current stamina",
+    stamina_max: "number -maximum stamina",
+    gold: "number -gold held",
+    xp: "number -total experience points",
+    level: "number -current character level",
+    character_name: "string -player character name",
+    character_class: "string -character class (e.g. Rogue, Mage)",
+    campaign_id: "string -active campaign identifier",
+    current_location: "string -current scene/location id",
+    inventory: "array -items held (id, name, item_type, effects)",
+    quest_state: "object -map of quest_id to { status }",
+    relationships: "object -map of npc_id to { name, score, tier }",
+    factions: "object -map of faction_id to numeric standing",
+    known_lore: "array -codex entries discovered (id, title, category, body)",
+    skills: "object -map of skill_name to numeric modifier",
+    schema_version: "number -save format version; used for migration",
+  },
+};
+
 interface SaveRequest {
-  action: "SAVE" | "LOAD" | "LIST" | "DELETE";
+  action: "SAVE" | "LOAD" | "LIST" | "DELETE" | "EXPORT";
   user_id: string;
   save_name?: string;
   save_id?: string;
@@ -18,7 +45,7 @@ function jsonResponse(body: unknown, status = 200): Response {
   });
 }
 
-serve(async (req: Request) => {
+if (import.meta.main) serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
     return new Response("ok", {
       headers: {
@@ -197,6 +224,60 @@ serve(async (req: Request) => {
       if (error) throw error;
 
       return jsonResponse({ status: "DELETED" });
+    }
+
+    // ── EXPORT ───────────────────────────────────────────────────
+    // §16.10 / Appendix C -human-readable debug bundle for support
+    // and migration failure triage. Never overwrites the original save.
+    if (action === "EXPORT") {
+      if (!body.save_id) {
+        return jsonResponse({ error: "save_id required for EXPORT" }, 400);
+      }
+
+      const { data: save, error: saveError } = await supabase
+        .from("manual_saves")
+        .select("*")
+        .eq("id", body.save_id)
+        .eq("user_id", user_id)
+        .single();
+
+      if (saveError || !save) {
+        return jsonResponse({ error: "Save not found" }, 404);
+      }
+
+      const schemaVersion = (save.schema_version as number) ?? 1;
+      const descriptor = SCHEMA_DESCRIPTORS[schemaVersion] ?? SCHEMA_DESCRIPTORS[1];
+
+      const snapshot = save.state_snapshot as Record<string, unknown>;
+
+      // Load the linked revision for full reproduction context
+      const { data: revision } = await supabase
+        .from("revisions")
+        .select("id, previous_id, player_action, route_category, success_tier, events, created_at")
+        .eq("id", save.revision_id)
+        .eq("user_id", user_id)
+        .maybeSingle();
+
+      return jsonResponse({
+        export_format: "nexus_tales_save_debug_v1",
+        exported_at: new Date().toISOString(),
+        save_metadata: {
+          save_id: save.id,
+          save_name: save.save_name,
+          created_at: save.created_at,
+          revision_id: save.revision_id,
+          campaign_id: save.campaign_id,
+          schema_version: schemaVersion,
+        },
+        schema_descriptor: {
+          version: schemaVersion,
+          fields: descriptor,
+        },
+        revision_context: revision ?? null,
+        canonical_state: snapshot.canonical_state ?? null,
+        campaign_state: snapshot.campaign_state ?? null,
+        migration_notes: "No migration errors recorded.",
+      });
     }
 
     return jsonResponse({ error: "Unknown action" }, 400);

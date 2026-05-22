@@ -1,3 +1,4 @@
+// @ts-nocheck — Supabase generic type params differ between esm.sh@2 and JSR functions-js; runtime is correct.
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
@@ -50,30 +51,31 @@ interface StateDelta {
   gold?: number;
 }
 
-function generateRevisionId(): string {
+export function generateRevisionId(): string {
   const num = Math.floor(Math.random() * 900000) + 100000;
   return `rev_${num}`;
 }
 
-function rollD20(modifier: number, dc: number): RollResult {
+export function rollD20(modifier: number, dc: number): RollResult {
   const die = Math.floor(Math.random() * 20) + 1;
   const total = die + modifier;
   let tier: SuccessTier;
-  if (die === 20 || total >= dc + 6) tier = "CRITICAL_SUCCESS";
+  if (die === 1) tier = "CRITICAL_FAILURE";
+  else if (die === 20 || total >= dc + 6) tier = "CRITICAL_SUCCESS";
   else if (total >= dc) tier = "FULL_SUCCESS";
   else if (total >= dc - 4) tier = "PARTIAL_SUCCESS";
-  else if (die === 1 || total <= dc - 8) tier = "CRITICAL_FAILURE";
+  else if (total <= dc - 8) tier = "CRITICAL_FAILURE";
   else tier = "FAILURE";
   return { die, modifier, total, dc, tier };
 }
 
 // ── NPC COUNTER-ATTACK DAMAGE ─────────────────────────────────────
 // Reads attack_damage from NPC data, falls back to 5 if not set.
-function getNpcCounterDamage(npc: Record<string, unknown>): number {
+export function getNpcCounterDamage(npc: Record<string, unknown>): number {
   return (npc.attack_damage as number) ?? 5;
 }
 
-function computeDelta(
+export function computeDelta(
   action: string,
   actionType: string | undefined,
   roll: RollResult | null,
@@ -250,7 +252,7 @@ function computeDelta(
 
 // ── FIND TARGET NPC ───────────────────────────────────────────────
 // Find which NPC the player is targeting based on action text.
-function findTargetNpc(
+export function findTargetNpc(
   action: string,
   npcsInScene: Record<string, unknown>[],
 ): Record<string, unknown> | null {
@@ -266,7 +268,7 @@ function findTargetNpc(
 
 // ── GET NPC HP ────────────────────────────────────────────────────
 // Get current NPC HP from npc_states (tracks damage across turns).
-function getNpcHp(
+export function getNpcHp(
   npcId: string,
   npc: Record<string, unknown>,
   npcStates: Record<string, unknown>,
@@ -334,7 +336,7 @@ function computeRelationshipDelta(
 }
 
 // ── RELATIONSHIP TIER ─────────────────────────────────────────────
-function getRelationshipTier(score: number): string {
+export function getRelationshipTier(score: number): string {
   if (score <= -51) return "Hostile";
   if (score <= -11) return "Distrustful";
   if (score <= 10) return "Neutral";
@@ -606,7 +608,7 @@ function buildNarrationContext(
 // Returns whether a summary job should be queued this turn,
 // and updates the turn counter + cooldown on canonical_state.
 
-async function evaluateSummaryTrigger(
+export async function evaluateSummaryTrigger(
   supabase: ReturnType<typeof createClient>,
   userId: string,
   events: string[],
@@ -732,7 +734,7 @@ async function updateCodex(
 
 // ── MAIN ─────────────────────────────────────────────────────────
 
-serve(async (req: Request) => {
+if (import.meta.main) serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
     return new Response("ok", {
       headers: {

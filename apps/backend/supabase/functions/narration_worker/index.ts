@@ -44,7 +44,7 @@ async function callOllama(prompt: string): Promise<string> {
 // Architecture requirement: narrator timeout must never leave the
 // player without a result. This builds prose from the revision data.
 
-function buildFallbackNarration(context: string): string {
+export function buildFallbackNarration(context: string): string {
   const lines = context.split("\n");
   const actionLine = lines.find((l) => l.startsWith("Player action:")) ?? "";
   const rollLine = lines.find((l) => l.startsWith("Roll:")) ?? "";
@@ -65,7 +65,7 @@ function buildFallbackNarration(context: string): string {
 
 // ── MAIN ─────────────────────────────────────────────────────────
 
-serve(async (req: Request) => {
+if (import.meta.main) serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
     return new Response("ok", {
       headers: {

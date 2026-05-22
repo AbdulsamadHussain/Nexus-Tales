@@ -5,6 +5,7 @@ import 'package:http/http.dart' as http;
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'character_sheet_panel.dart';
 import 'combat_panel.dart';
+import 'narration_fallback.dart';
 import 'saves_panel.dart';
 
 class GameScreen extends ConsumerStatefulWidget {
@@ -192,9 +193,16 @@ class _GameScreenState extends ConsumerState<GameScreen> {
         _scrollToBottom();
       }
 
+      final rawConstraints = data['narration_constraints'];
+      final constraints = rawConstraints is List
+          ? rawConstraints.map((e) => e.toString()).toList()
+          : <String>[];
+
       final narration = await _callOllama(
         data['narration_context'] as String? ?? '',
         data['success_tier'] as String? ?? 'NO_ROLL',
+        constraints: constraints,
+        simResult: data,
       );
       _scrollToBottom();
       _triggerSummaryWorker(data, action);
@@ -221,6 +229,7 @@ class _GameScreenState extends ConsumerState<GameScreen> {
     String context,
     String tier, {
     List<String> constraints = const [],
+    Map<String, dynamic> simResult = const {},
   }) async {
     try {
       final constraintText = constraints.isNotEmpty
@@ -255,32 +264,20 @@ class _GameScreenState extends ConsumerState<GameScreen> {
         debugPrint('=== END ===');
         if (raw.contains('</think>')) {
           final cleaned = raw.substring(raw.lastIndexOf('</think>') + 8).trim();
-          return cleaned.isEmpty ? _fallbackNarration(tier) : cleaned;
+          return cleaned.isEmpty ? _fallbackNarration(tier, simResult) : cleaned;
         }
-        return raw.trim().isEmpty ? _fallbackNarration(tier) : raw.trim();
+        return raw.trim().isEmpty ? _fallbackNarration(tier, simResult) : raw.trim();
       }
-      return _fallbackNarration(tier);
+      return _fallbackNarration(tier, simResult);
     } catch (_) {
-      return _fallbackNarration(tier);
+      return _fallbackNarration(tier, simResult);
     }
   }
 
-  String _fallbackNarration(String tier) {
-    switch (tier) {
-      case 'CRITICAL_SUCCESS':
-        return 'You act with exceptional precision. The outcome exceeds all expectation.';
-      case 'FULL_SUCCESS':
-        return 'Your action succeeds. The moment resolves in your favour.';
-      case 'PARTIAL_SUCCESS':
-        return 'You partly succeed, but not without cost.';
-      case 'FAILURE':
-        return 'The attempt fails. The situation grows more dangerous.';
-      case 'CRITICAL_FAILURE':
-        return 'Everything goes wrong. The consequences are severe.';
-      default:
-        return 'The moment passes.';
-    }
-  }
+  // Delegates to the pure extracted function in narration_fallback.dart
+  // so the logic can be unit tested without Flutter widget dependencies.
+  String _fallbackNarration(String tier, Map<String, dynamic> data) =>
+      buildFallbackNarration(tier, data);
 
   @override
   Widget build(BuildContext context) {
@@ -866,6 +863,7 @@ Input: "the cabinet I need what is inside" → {"route": "ROLL_REQUIRED", "actio
         data['narration_context'] as String? ?? '',
         data['success_tier'] as String? ?? 'NO_ROLL',
         constraints: constraints,
+        simResult: data,
       );
 
       setState(() {

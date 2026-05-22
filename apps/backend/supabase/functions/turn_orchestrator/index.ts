@@ -47,14 +47,14 @@ interface AmbiguityTracker {
 
 // ── Safety Gateway ────────────────────────────────────────────────
 
-function runSafetyGateway(
+export function runSafetyGateway(
   input: string,
   contentSettings: TurnRequest["content_settings"],
 ): GatewayResult {
   const lower = input.toLowerCase();
 
   if (
-    /ignore (all |previous |your )?instructions|system prompt|jailbreak|override rules|forget everything|you are now|pretend you/
+    /ignore ([\w ]+ )?instructions|system prompt|jailbreak|override rules|forget everything|you are now|pretend you/
       .test(lower)
   ) {
     return {
@@ -107,7 +107,7 @@ function runSafetyGateway(
 
 // ── Deterministic Router ──────────────────────────────────────────
 
-function runDeterministicRouter(input: string): { route: RouteCategory; actionType: string; candidateSkill?: string } {
+export function runDeterministicRouter(input: string): { route: RouteCategory; actionType: string; candidateSkill?: string } {
   const lower = input.trim().toLowerCase();
 
   if (/\b(inventory|codex|map|quest log|settings|save|load)\b/.test(lower)) {
@@ -180,7 +180,7 @@ function runDeterministicRouter(input: string): { route: RouteCategory; actionTy
 
 // ── Ambiguity counter helpers (§6.3) ─────────────────────────────
 
-function shouldNoOp(
+export function shouldNoOp(
   tracker: AmbiguityTracker,
   currentScene: string,
   route: RouteCategory,
@@ -193,7 +193,7 @@ function shouldNoOp(
   return tracker.count >= 2;
 }
 
-function nextTracker(
+export function nextTracker(
   tracker: AmbiguityTracker,
   currentScene: string,
   route: RouteCategory,
@@ -240,7 +240,7 @@ function jsonResponse(body: unknown, status = 200): Response {
 
 // ── Main handler ──────────────────────────────────────────────────
 
-serve(async (req: Request) => {
+if (import.meta.main) serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
     return new Response("ok", {
       headers: {
