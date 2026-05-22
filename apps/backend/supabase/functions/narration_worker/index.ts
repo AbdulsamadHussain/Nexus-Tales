@@ -44,7 +44,7 @@ async function callOllama(prompt: string): Promise<string> {
 // Architecture requirement: narrator timeout must never leave the
 // player without a result. This builds prose from the revision data.
 
-function buildFallbackNarration(context: string): string {
+export function buildFallbackNarration(context: string): string {
   const lines = context.split("\n");
   const actionLine = lines.find((l) => l.startsWith("Player action:")) ?? "";
   const rollLine = lines.find((l) => l.startsWith("Roll:")) ?? "";
@@ -65,7 +65,7 @@ function buildFallbackNarration(context: string): string {
 
 // ── MAIN ─────────────────────────────────────────────────────────
 
-serve(async (req: Request) => {
+if (import.meta.main) serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
     return new Response("ok", {
       headers: {
@@ -111,7 +111,7 @@ Narrate what happens in 2-4 vivid sentences. Second person present tense. Dark f
     // This does NOT affect canonical game state
     const supabase = createClient(
       Deno.env.get("SUPABASE_URL")!,
-      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
+      Deno.env.get("SVC_ROLE_KEY")!
     );
 
     await supabase

@@ -16,12 +16,16 @@ type GatewayDecision =
   | "REJECT";
 
 interface TurnRequest {
-  user_id: string;
+  // user_id intentionally omitted — always derived from the verified JWT
+  character_id?: string;
   player_action: string;
   previous_revision_id: string | null;
   resolved_route?: string;
+  resolved_action_type?: string;
+  candidate_skill?: string;
   content_settings: {
     violence: boolean;
+    graphic: boolean;
     horror: boolean;
     romance: boolean;
     mature: boolean;
@@ -44,14 +48,14 @@ interface AmbiguityTracker {
 
 // ── Safety Gateway ────────────────────────────────────────────────
 
-function runSafetyGateway(
+export function runSafetyGateway(
   input: string,
   contentSettings: TurnRequest["content_settings"],
 ): GatewayResult {
   const lower = input.toLowerCase();
 
   if (
-    /ignore (all |previous |your )?instructions|system prompt|jailbreak|override rules|forget everything|you are now|pretend you/
+    /ignore ([\w ]+ )?instructions|system prompt|jailbreak|override rules|forget everything|you are now|pretend you/
       .test(lower)
   ) {
     return {
@@ -85,11 +89,11 @@ function runSafetyGateway(
     };
   }
 
-  if (contentSettings.violence && /gore|brutal|visceral|graphic/.test(lower)) {
+  if (contentSettings.violence && !contentSettings.graphic && /gore|brutal|visceral|graphic/.test(lower)) {
     return {
       decision: "ALLOW_WITH_CONSTRAINTS",
       sanitized_input: input,
-      policy_flags: ["VIOLENCE_LIMITED"],
+      policy_flags: ["GRAPHIC_DISABLED"],
       narration_constraints: ["NO_GORE"],
     };
   }
@@ -104,69 +108,80 @@ function runSafetyGateway(
 
 // ── Deterministic Router ──────────────────────────────────────────
 
-function runDeterministicRouter(input: string): RouteCategory {
+export function runDeterministicRouter(input: string): { route: RouteCategory; actionType: string; candidateSkill?: string } {
   const lower = input.trim().toLowerCase();
 
   if (/\b(inventory|codex|map|quest log|settings|save|load)\b/.test(lower)) {
-    return "UI_ACTION";
+    return { route: "UI_ACTION", actionType: "UI_ACTION" };
   }
-  if (lower.length < 4) return "CLARIFICATION_REQUIRED";
+  if (lower.length < 4) return { route: "CLARIFICATION_REQUIRED", actionType: "OTHER" };
   if (
     /^(hi|hello|hey|sup|yo|hi there|good morning|good evening)[\s!?.]*$/.test(
       lower,
     )
-  ) return "CLARIFICATION_REQUIRED";
+  ) return { route: "CLARIFICATION_REQUIRED", actionType: "OTHER" };
   if (
     /what (model|ai|llm|version)|who are you|are you (an ai|a bot|gpt|claude|gemma)/
       .test(lower)
-  ) return "CLARIFICATION_REQUIRED";
+  ) return { route: "CLARIFICATION_REQUIRED", actionType: "OTHER" };
 
   if (
     /\b(read|look at|examine|check|open unlocked|buy|purchase|talk to|speak to|ask about)\b/
       .test(lower) &&
     !/attack|fight|sneak|steal|pick lock|persuade|intimidate|cast|jump|climb/
       .test(lower)
-  ) return "NO_ROLL_DETERMINISTIC";
+  ) {
+    if (/\b(talk to|speak to|ask about)\b/.test(lower)) return { route: "NO_ROLL_DETERMINISTIC", actionType: "SPEAK" };
+    return { route: "NO_ROLL_DETERMINISTIC", actionType: "EXAMINE" };
+  }
 
   if (
     /\b(go to|walk to|move to|head to|enter|leave|go north|go south|go east|go west)\b/
       .test(lower)
-  ) return "NO_ROLL_DETERMINISTIC";
+  ) return { route: "NO_ROLL_DETERMINISTIC", actionType: "MOVE" };
+  
   if (
-    /\b(attack|strike|stab|shoot|cast|throw|charge|backstab|ambush|slash|punch|kick)\b/
-      .test(lower)
-  ) return "ROLL_REQUIRED";
+    /\b(attack|strike|stab|shoot|cast|throw|charge|backstab|ambush|slash|punch|kick|torture|mutilate|dismember|interrogate)\b/
+    .test(lower)
+  ) return { route: "ROLL_REQUIRED", actionType: "ATTACK", candidateSkill: "melee" };
+  
   if (/\b(sneak|hide|shadow|disappear|cloak|blend in)\b/.test(lower)) {
-    return "ROLL_REQUIRED";
+    return { route: "ROLL_REQUIRED", actionType: "STEALTH", candidateSkill: "stealth" };
   }
+  
+  if (/\b(pick lock|lockpick)\b/.test(lower)) return { route: "ROLL_REQUIRED", actionType: "SKILL_CHECK", candidateSkill: "lockpick" };
+  if (/\b(persuade|intimidate|deceive|bluff)\b/.test(lower)) return { route: "ROLL_REQUIRED", actionType: "SKILL_CHECK", candidateSkill: "persuasion" };
+  if (/\b(search|investigate)\b/.test(lower)) return { route: "ROLL_REQUIRED", actionType: "SKILL_CHECK", candidateSkill: "perception" };
   if (
-    /\b(pick lock|lockpick|persuade|intimidate|deceive|bluff|steal|pickpocket|climb|jump|escape|search|investigate|disarm|hack)\b/
+    /\b(steal|pickpocket|climb|jump|escape|disarm|hack)\b/
       .test(lower)
-  ) return "ROLL_REQUIRED";
+  ) return { route: "ROLL_REQUIRED", actionType: "SKILL_CHECK" };
+  
   if (/\b(retreat|flee|run away|back away|exit)\b/.test(lower)) {
-    return "NO_ROLL_DETERMINISTIC";
+    return { route: "NO_ROLL_DETERMINISTIC", actionType: "MOVE" };
   }
 
   if (
     /\b(rest|sit|breathe|recover|catch my breath|take a moment|take a break|meditate|sleep|wait)\b/
       .test(lower)
-  ) return "NO_ROLL_DETERMINISTIC";
+  ) return { route: "NO_ROLL_DETERMINISTIC", actionType: "REST" };
+  
   if (
     /\b(use|drink|apply|consume)\b.*(salve|potion|vial|healing|remedy|bandage)/
       .test(lower) || /\b(healing salve|health potion)\b/.test(lower)
-  ) return "NO_ROLL_DETERMINISTIC";
+  ) return { route: "NO_ROLL_DETERMINISTIC", actionType: "USE_ITEM" };
 
   if (
     /\b(i |my |we )(try|attempt|grab|take|use|open|push|pull|lift|break|destroy|throw|place|drop|equip|unequip)\b/
       .test(lower)
-  ) return "ROLL_REQUIRED";
+  ) return { route: "ROLL_REQUIRED", actionType: "SKILL_CHECK" };
 
-  return "CLARIFICATION_REQUIRED";
+  return { route: "CLARIFICATION_REQUIRED", actionType: "OTHER" };
 }
 
 // ── Ambiguity counter helpers (§6.3) ─────────────────────────────
 
-function shouldNoOp(
+export function shouldNoOp(
   tracker: AmbiguityTracker,
   currentScene: string,
   route: RouteCategory,
@@ -179,7 +194,7 @@ function shouldNoOp(
   return tracker.count >= 2;
 }
 
-function nextTracker(
+export function nextTracker(
   tracker: AmbiguityTracker,
   currentScene: string,
   route: RouteCategory,
@@ -226,7 +241,7 @@ function jsonResponse(body: unknown, status = 200): Response {
 
 // ── Main handler ──────────────────────────────────────────────────
 
-serve(async (req: Request) => {
+if (import.meta.main) serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
     return new Response("ok", {
       headers: {
@@ -239,11 +254,23 @@ serve(async (req: Request) => {
   }
 
   try {
-    const body: TurnRequest = await req.json();
-    const { user_id, player_action, previous_revision_id, content_settings } =
-      body;
+    // ── Identity: always derive user_id from the verified JWT ─────
+    const authHeader = req.headers.get("Authorization");
+    if (!authHeader) return jsonResponse({ error: "No auth header" }, 401);
 
-    if (!user_id || !player_action || !content_settings) {
+    const userClient = createClient(
+      Deno.env.get("SUPABASE_URL")!,
+      Deno.env.get("SUPABASE_ANON_KEY")!,
+      { global: { headers: { Authorization: authHeader } } },
+    );
+    const { data: { user }, error: userError } = await userClient.auth.getUser();
+    if (userError || !user) return jsonResponse({ error: "Invalid token" }, 401);
+    const user_id = user.id;
+
+    const body: TurnRequest = await req.json();
+    const { character_id, player_action, previous_revision_id, content_settings } = body;
+
+    if (!player_action || !content_settings || !character_id) {
       return jsonResponse({ error: "Missing required fields." }, 400);
     }
 
@@ -267,11 +294,32 @@ serve(async (req: Request) => {
       "UI_ACTION",
       "SYSTEM_TRANSFORMED_ACTION",
     ];
+    
+    // §6.2 Validation: Enforce strict schema on parsed route and action_type
+    const validActionTypes = ["SPEAK", "EXAMINE", "MOVE", "USE_ITEM", "ATTACK", "STEALTH", "SKILL_CHECK", "OTHER", "REST"];
+    
+    let routeCategory: RouteCategory;
+    let actionType: string;
+    let candidateSkill: string | undefined = body.candidate_skill;
+
     const resolvedRoute = body.resolved_route;
-    const routeCategory: RouteCategory =
-      (resolvedRoute && validRoutes.includes(resolvedRoute))
-        ? resolvedRoute as RouteCategory
-        : runDeterministicRouter(gateway.sanitized_input);
+    const resolvedActionType = body.resolved_action_type;
+
+    if (resolvedRoute && validRoutes.includes(resolvedRoute)) {
+      if (resolvedActionType && validActionTypes.includes(resolvedActionType)) {
+        routeCategory = resolvedRoute as RouteCategory;
+        actionType = resolvedActionType;
+      } else {
+        // §6.2 Unknown semantic field -> reject entire parser output
+        routeCategory = "CLARIFICATION_REQUIRED";
+        actionType = "OTHER";
+      }
+    } else {
+      const routerResult = runDeterministicRouter(gateway.sanitized_input);
+      routeCategory = routerResult.route;
+      actionType = routerResult.actionType;
+      candidateSkill = routerResult.candidateSkill;
+    }
 
     if (routeCategory === "UI_ACTION") {
       return jsonResponse({
@@ -290,6 +338,7 @@ serve(async (req: Request) => {
       .from("canonical_state")
       .select("current_location, ambiguity_tracker")
       .eq("user_id", user_id)
+      .eq("character_id", character_id)
       .single();
 
     const currentScene = (stateRow?.current_location as string) ?? "unknown";
@@ -317,7 +366,8 @@ serve(async (req: Request) => {
             last_route: null,
           },
         })
-        .eq("user_id", user_id);
+        .eq("user_id", user_id)
+        .eq("character_id", character_id);
 
       return jsonResponse({
         status: "NO_OP",
@@ -334,7 +384,8 @@ serve(async (req: Request) => {
       await supabase
         .from("canonical_state")
         .update({ ambiguity_tracker: updatedTracker })
-        .eq("user_id", user_id);
+        .eq("user_id", user_id)
+        .eq("character_id", character_id);
 
       return jsonResponse({
         status: "CLARIFICATION_REQUIRED",
@@ -347,8 +398,11 @@ serve(async (req: Request) => {
     // ── STEP 4: Simulation service (only state writer) ────────────
     const simResponse = await callFunction("simulation_service", {
       user_id,
+      character_id,
       player_action: gateway.sanitized_input,
       route_category: routeCategory,
+      action_type: actionType,
+      candidate_skill: candidateSkill,
       gateway_decision: gateway.decision,
       narration_constraints: gateway.narration_constraints,
       previous_revision_id,
@@ -365,7 +419,8 @@ serve(async (req: Request) => {
     await supabase
       .from("canonical_state")
       .update({ ambiguity_tracker: updatedTracker })
-      .eq("user_id", user_id);
+      .eq("user_id", user_id)
+      .eq("character_id", character_id);
 
     // ── STEP 5: Return to Flutter ─────────────────────────────────
     return jsonResponse({
@@ -382,6 +437,7 @@ serve(async (req: Request) => {
       npc_states: simResult.npc_states,
       npcs_in_scene: simResult.npcs_in_scene,
       summary_job_queued: simResult.summary_job_queued,
+      narration_constraints: gateway.narration_constraints,
     });
   } catch (err) {
     console.error("turn_orchestrator error:", err);

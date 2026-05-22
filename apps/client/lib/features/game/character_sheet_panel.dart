@@ -6,14 +6,18 @@ class CharacterSheetPanel extends StatefulWidget {
   final VoidCallback onClose;
   final VoidCallback? onSettingChanged;
   final Map<String, dynamic> contentSettings;
+  /// Called when the player taps "Use" on an inventory item.
+  /// The game screen should populate the action field and submit.
+  final void Function(String action)? onUseItem;
 
-const CharacterSheetPanel({
-  super.key,
-  required this.canonicalState,
-  required this.contentSettings,
-  required this.onClose,
-  this.onSettingChanged,
-});
+  const CharacterSheetPanel({
+    super.key,
+    required this.canonicalState,
+    required this.contentSettings,
+    required this.onClose,
+    this.onSettingChanged,
+    this.onUseItem,
+  });
 
   @override
   State<CharacterSheetPanel> createState() => _CharacterSheetPanelState();
@@ -23,18 +27,160 @@ class _CharacterSheetPanelState extends State<CharacterSheetPanel>
     with SingleTickerProviderStateMixin {
   late TabController _tabController;
   Map<String, dynamic>? _localContentSettings;
+  bool _editingClass = false;
+  String? _pendingClass;
+  bool _classChangeBusy = false;
+  List<Map<String, dynamic>> _npcs = [];
+
+  // Character story editing
+  final _nameEditController = TextEditingController();
+  final _originEditController = TextEditingController();
+  final _backstoryEditController = TextEditingController();
+  bool _storyEditBusy = false;
+
+  static const _classes = ['Rogue', 'War Mage', 'Warden', 'Plague Doctor', 'Hex Blade'];
 
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 4, vsync: this);
+    _tabController = TabController(length: 6, vsync: this);
+    _loadNpcs();
+  }
+
+  Future<void> _loadNpcs() async {
+    final campaignId = widget.canonicalState['campaign_id'] as String?;
+    if (campaignId == null) return;
+    try {
+      final data = await Supabase.instance.client
+          .from('npcs')
+          .select('id, name, archetype, role, faction')
+          .eq('campaign_id', campaignId);
+      if (mounted) {
+        setState(() => _npcs = List<Map<String, dynamic>>.from(data));
+      }
+    } catch (e) {
+      debugPrint('NPC load failed: $e');
+    }
   }
 
   @override
   void dispose() {
     _tabController.dispose();
+    _nameEditController.dispose();
+    _originEditController.dispose();
+    _backstoryEditController.dispose();
     super.dispose();
   }
+
+  void _openStoryEditor(Map<String, dynamic> s) {
+    _nameEditController.text = s['character_name'] as String? ?? '';
+    _originEditController.text = s['origin'] as String? ?? '';
+    _backstoryEditController.text = s['backstory'] as String? ?? '';
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: const Color(0xFF0F1219),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+        side: BorderSide(color: Color(0xFF1A2230)),
+      ),
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setSheet) => Padding(
+          padding: EdgeInsets.only(
+            left: 24, right: 24, top: 24,
+            bottom: MediaQuery.of(ctx).viewInsets.bottom + 24,
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Row(children: [
+                const Text('EDIT CHARACTER', style: TextStyle(color: Color(0xFFC9A84C), fontSize: 12, letterSpacing: 2)),
+                const Spacer(),
+                IconButton(
+                  icon: const Icon(Icons.close, color: Color(0xFF4A5A72), size: 18),
+                  onPressed: () => Navigator.pop(ctx),
+                ),
+              ]),
+              const SizedBox(height: 16),
+              _sheetLabel('Name'),
+              _sheetField(_nameEditController, 'Character name'),
+              const SizedBox(height: 14),
+              _sheetLabel('Origin'),
+              _sheetField(_originEditController, 'e.g. Street Rat, Exiled Noble...'),
+              const SizedBox(height: 14),
+              _sheetLabel('Backstory'),
+              _sheetField(_backstoryEditController, 'Who are you, and what drove you here?', maxLines: 4),
+              const SizedBox(height: 8),
+              const Text(
+                'Name and origin shape how the narrator refers to you. Backstory influences tone.',
+                style: TextStyle(color: Color(0xFF4A5A72), fontSize: 11),
+              ),
+              const SizedBox(height: 20),
+              ElevatedButton(
+                onPressed: _storyEditBusy ? null : () async {
+                  setSheet(() => _storyEditBusy = true);
+                  try {
+                    // Profile edits go through canonical_command — server enforces limits
+                    await Supabase.instance.client.functions.invoke(
+                      'canonical_command',
+                      body: {
+                        'character_id': widget.canonicalState['character_id'] as String,
+                        'command': 'EDIT_PROFILE',
+                        'character_name': _nameEditController.text.trim(),
+                        'origin': _originEditController.text.trim(),
+                        'backstory': _backstoryEditController.text.trim(),
+                      },
+                    );
+                    widget.onSettingChanged?.call();
+                    if (ctx.mounted) Navigator.pop(ctx);
+                  } catch (e) {
+                    if (ctx.mounted) {
+                      ScaffoldMessenger.of(ctx).showSnackBar(
+                        SnackBar(content: Text('Error: $e')),
+                      );
+                    }
+                  } finally {
+                    if (mounted) setSheet(() => _storyEditBusy = false);
+                  }
+                },
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFF2D7DD2),
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
+                ),
+                child: _storyEditBusy
+                    ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                    : const Text('Save changes', style: TextStyle(letterSpacing: 1)),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _sheetLabel(String text) => Padding(
+    padding: const EdgeInsets.only(bottom: 6),
+    child: Text(text.toUpperCase(), style: const TextStyle(color: Color(0xFF4A5A72), fontSize: 10, letterSpacing: 1.5)),
+  );
+
+  Widget _sheetField(TextEditingController ctrl, String hint, {int maxLines = 1}) => TextField(
+    controller: ctrl,
+    maxLines: maxLines,
+    style: const TextStyle(color: Colors.white, fontSize: 13),
+    decoration: InputDecoration(
+      hintText: hint,
+      hintStyle: const TextStyle(color: Color(0xFF4A5A72)),
+      filled: true,
+      fillColor: const Color(0xFF1A2230),
+      border: OutlineInputBorder(borderRadius: BorderRadius.circular(6), borderSide: const BorderSide(color: Color(0xFF2D3A4A))),
+      enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(6), borderSide: const BorderSide(color: Color(0xFF2D3A4A))),
+      focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(6), borderSide: const BorderSide(color: Color(0xFF4A9EFF))),
+      contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+    ),
+  );
 
   @override
   Widget build(BuildContext context) {
@@ -59,11 +205,35 @@ class _CharacterSheetPanelState extends State<CharacterSheetPanel>
                 _buildInventoryTab(s),
                 _buildQuestsTab(s),
                 _buildRelationsTab(s),
+                _buildCodexTab(s),
+                _buildNpcsTab(s),
               ],
             ),
           ),
         ],
       ),
+    );
+  }
+
+  Widget _buildPortraitIcon(Map<String, dynamic> s) {
+    final portrait = s['portrait'] as String? ?? 'default';
+    final Map<String, (IconData, Color)> portraitMap = {
+      'default': (Icons.person, const Color(0xFF4A5A72)),
+      'rogue':   (Icons.visibility_off, const Color(0xFF9B59B6)),
+      'mage':    (Icons.auto_fix_high, const Color(0xFF4A9EFF)),
+      'warrior': (Icons.shield, const Color(0xFF7F8C8D)),
+      'doctor':  (Icons.science, const Color(0xFF4CAF82)),
+      'hex':     (Icons.hexagon, const Color(0xFFE05555)),
+    };
+    final (icon, color) = portraitMap[portrait] ?? (Icons.person, const Color(0xFF4A5A72));
+    return Container(
+      width: 44, height: 44,
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.15),
+        shape: BoxShape.circle,
+        border: Border.all(color: color.withOpacity(0.5)),
+      ),
+      child: Icon(icon, color: color, size: 22),
     );
   }
 
@@ -75,25 +245,7 @@ class _CharacterSheetPanelState extends State<CharacterSheetPanel>
       ),
       child: Row(
         children: [
-          Container(
-            width: 44,
-            height: 44,
-            decoration: BoxDecoration(
-              color: const Color(0xFF1A2230),
-              borderRadius: BorderRadius.circular(22),
-              border: Border.all(color: const Color(0xFF8A6D2E)),
-            ),
-            child: Center(
-              child: Text(
-                (s['character_name'] as String? ?? '?')[0].toUpperCase(),
-                style: const TextStyle(
-                  color: Color(0xFFC9A84C),
-                  fontSize: 18,
-                  fontWeight: FontWeight.w500,
-                ),
-              ),
-            ),
-          ),
+          _buildPortraitIcon(s),
           const SizedBox(width: 12),
           Expanded(
             child: Column(
@@ -108,7 +260,7 @@ class _CharacterSheetPanelState extends State<CharacterSheetPanel>
                   ),
                 ),
                 Text(
-                  '${s['character_class']} · ${s['origin']}',
+                  '${s['character_class']}',
                   style: const TextStyle(
                     color: Color(0xFF4A5A72),
                     fontSize: 11,
@@ -123,6 +275,11 @@ class _CharacterSheetPanelState extends State<CharacterSheetPanel>
                 ),
               ],
             ),
+          ),
+          IconButton(
+            icon: const Icon(Icons.edit_outlined, color: Color(0xFF4A5A72), size: 16),
+            tooltip: 'Edit character',
+            onPressed: () => _openStoryEditor(s),
           ),
           IconButton(
             icon: const Icon(Icons.close, color: Color(0xFF4A5A72), size: 18),
@@ -214,17 +371,211 @@ class _CharacterSheetPanelState extends State<CharacterSheetPanel>
         Tab(text: 'STATS'),
         Tab(text: 'INV'),
         Tab(text: 'QUESTS'),
-        Tab(text: 'RELATIONS'),
+        Tab(text: 'RELS'),
+        Tab(text: 'CODEX'),
+        Tab(text: 'NPCS'),
       ],
     );
   }
 
   // ── STATS TAB ──────────────────────────────────────────────────
 
+  // Returns null if change is allowed, or a human-readable reason string.
+  String? _classChangeBlockReason(Map<String, dynamic> s) {
+    final raw = s['last_class_change_at'] as String?;
+    if (raw == null) return null; // never changed — allowed
+    final last = DateTime.tryParse(raw);
+    if (last == null) return null;
+    final diff = DateTime.now().difference(last);
+    if (diff.inDays < 30) {
+      final daysLeft = 30 - diff.inDays;
+      return 'Available in $daysLeft day${daysLeft == 1 ? '' : 's'}';
+    }
+    return null;
+  }
+
+  Future<void> _confirmClassChange(Map<String, dynamic> s) async {
+    if (_pendingClass == null || _classChangeBusy) return;
+    setState(() => _classChangeBusy = true);
+
+    try {
+      final user = Supabase.instance.client.auth.currentUser!;
+      // Recalculate stats for the new class
+      final hpMax = _pendingClass == 'Warden' ? 60 : _pendingClass == 'War Mage' ? 28 : 40;
+      final mpMax = _pendingClass == 'War Mage' ? 40 : _pendingClass == 'Hex Blade' ? 30 : 20;
+
+      await Supabase.instance.client
+          .from('canonical_state')
+          .update({
+            'character_class': _pendingClass,
+            'hp_max': hpMax,
+            'hp': (s['hp'] as int).clamp(0, hpMax),
+            'mp_max': mpMax,
+            'mp': (s['mp'] as int).clamp(0, mpMax),
+            'last_class_change_at': DateTime.now().toIso8601String(),
+          })
+          .eq('user_id', user.id)
+          .eq('character_id', s['character_id'] as String);
+
+      widget.onSettingChanged?.call();
+      setState(() {
+        _editingClass = false;
+        _pendingClass = null;
+      });
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error: $e')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _classChangeBusy = false);
+    }
+  }
+
+  Widget _buildClassEditor(Map<String, dynamic> s) {
+    final blockReason = _classChangeBlockReason(s);
+    final currentClass = s['character_class'] as String? ?? '';
+
+    if (!_editingClass) {
+      return Padding(
+        padding: const EdgeInsets.only(bottom: 8),
+        child: Row(
+          children: [
+            Text(
+              currentClass,
+              style: const TextStyle(color: Color(0xFF8898B0), fontSize: 12),
+            ),
+            const Spacer(),
+            if (blockReason != null)
+              Text(
+                blockReason,
+                style: const TextStyle(color: Color(0xFF4A5A72), fontSize: 10),
+              )
+            else
+              GestureDetector(
+                onTap: () => setState(() {
+                  _editingClass = true;
+                  _pendingClass = currentClass;
+                }),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF1A2230),
+                    borderRadius: BorderRadius.circular(4),
+                    border: Border.all(color: const Color(0xFF2D3A4A)),
+                  ),
+                  child: const Text(
+                    'CHANGE',
+                    style: TextStyle(color: Color(0xFF4A9EFF), fontSize: 10, letterSpacing: 1),
+                  ),
+                ),
+              ),
+          ],
+        ),
+      );
+    }
+
+    // Editing mode
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Wrap(
+          spacing: 6,
+          runSpacing: 6,
+          children: _classes.map((c) {
+            final sel = (_pendingClass ?? currentClass) == c;
+            return GestureDetector(
+              onTap: () => setState(() => _pendingClass = c),
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                decoration: BoxDecoration(
+                  color: sel ? const Color(0xFF0F1A2E) : const Color(0xFF1A2230),
+                  borderRadius: BorderRadius.circular(6),
+                  border: Border.all(
+                    color: sel ? const Color(0xFF4A9EFF) : const Color(0xFF2D3A4A),
+                  ),
+                ),
+                child: Text(
+                  c,
+                  style: TextStyle(
+                    color: sel ? const Color(0xFF4A9EFF) : const Color(0xFF8898B0),
+                    fontSize: 11,
+                  ),
+                ),
+              ),
+            );
+          }).toList(),
+        ),
+        const SizedBox(height: 8),
+        const Text(
+          'This can only be changed once every 30 days. HP and MP max will update.',
+          style: TextStyle(color: Color(0xFF4A5A72), fontSize: 10, height: 1.4),
+        ),
+        const SizedBox(height: 8),
+        Row(
+          children: [
+            Expanded(
+              child: GestureDetector(
+                onTap: () => setState(() {
+                  _editingClass = false;
+                  _pendingClass = null;
+                }),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(vertical: 8),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF1A2230),
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  child: const Text(
+                    'Cancel',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(color: Color(0xFF4A5A72), fontSize: 12),
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: GestureDetector(
+                onTap: _classChangeBusy ? null : () => _confirmClassChange(s),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(vertical: 8),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF0F1A2E),
+                    borderRadius: BorderRadius.circular(6),
+                    border: Border.all(color: const Color(0xFF4A9EFF).withValues(alpha: 0.5)),
+                  ),
+                  child: _classChangeBusy
+                      ? const Center(
+                          child: SizedBox(
+                            width: 12,
+                            height: 12,
+                            child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFF4A9EFF)),
+                          ),
+                        )
+                      : const Text(
+                          'Confirm',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(color: Color(0xFF4A9EFF), fontSize: 12),
+                        ),
+                ),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 8),
+      ],
+    );
+  }
+
   Widget _buildStatsTab(Map<String, dynamic> s) {
     return ListView(
       padding: const EdgeInsets.all(14),
       children: [
+        _sectionTitle('Character'),
+        _buildClassEditor(s),
+        const SizedBox(height: 8),
         _sectionTitle('Resources'),
         _statRow('Gold', '${s['gold']} gp', const Color(0xFFC9A84C)),
         _statRow('XP', '${s['xp']}', const Color(0xFF8898B0)),
@@ -250,17 +601,13 @@ class _CharacterSheetPanelState extends State<CharacterSheetPanel>
     );
   }
 
-List<Widget> _buildContentSettings(Map<String, dynamic> settings) {
-    final labels = {
-      'violence': 'Violence',
-      'horror': 'Horror',
-      'romance': 'Romance',
-      'mature': 'Mature themes',
-    };
-    return labels.entries.map((e) {
-      final on = settings[e.key] as bool? ?? false;
+  List<Widget> _buildContentSettings(Map<String, dynamic> settings) {
+    final violenceOn = settings['violence'] as bool? ?? false;
+
+    Widget settingRow(String key, String label, {double leftPad = 0}) {
+      final on = settings[key] as bool? ?? false;
       return Padding(
-        padding: const EdgeInsets.only(bottom: 5),
+        padding: EdgeInsets.only(bottom: 5, left: leftPad),
         child: Row(
           children: [
             Container(
@@ -273,12 +620,12 @@ List<Widget> _buildContentSettings(Map<String, dynamic> settings) {
             ),
             const SizedBox(width: 8),
             Text(
-              e.value,
+              label,
               style: const TextStyle(color: Color(0xFF8898B0), fontSize: 12),
             ),
             const Spacer(),
             GestureDetector(
-              onTap: () => _toggleContentSetting(e.key, !on, settings),
+              onTap: () => _toggleContentSetting(key, !on, settings),
               child: Container(
                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                 decoration: BoxDecoration(
@@ -307,10 +654,18 @@ List<Widget> _buildContentSettings(Map<String, dynamic> settings) {
           ],
         ),
       );
-    }).toList();
+    }
+
+    return [
+      settingRow('violence', 'Violence'),
+      if (violenceOn) settingRow('graphic', 'Graphic', leftPad: 16),
+      settingRow('horror', 'Horror'),
+      settingRow('romance', 'Romance'),
+      settingRow('mature', 'Mature themes'),
+    ];
   }
 
-Future<void> _toggleContentSetting(
+  Future<void> _toggleContentSetting(
     String key,
     bool newValue,
     Map<String, dynamic> currentSettings,
@@ -422,6 +777,28 @@ Future<void> _toggleContentSetting(
               'x${item['quantity']}',
               style: const TextStyle(color: Color(0xFF4A5A72), fontSize: 10),
             ),
+          if (item['item_type'] == 'consumable' && widget.onUseItem != null) ...[
+            const SizedBox(width: 6),
+            GestureDetector(
+              onTap: () {
+                final itemName = item['name'] as String? ?? 'item';
+                widget.onUseItem!('use $itemName');
+                widget.onClose(); // close the sheet so player sees the action
+              },
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF4CAF82).withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(4),
+                  border: Border.all(color: const Color(0xFF4CAF82).withOpacity(0.4)),
+                ),
+                child: const Text(
+                  'USE',
+                  style: TextStyle(color: Color(0xFF4CAF82), fontSize: 9, letterSpacing: 1),
+                ),
+              ),
+            ),
+          ],
         ],
       ),
     );
@@ -610,6 +987,293 @@ Future<void> _toggleContentSetting(
     );
   }
 
+  // ── CODEX TAB ───────────────────────────────────────────────────
+
+  Widget _buildCodexTab(Map<String, dynamic> s) {
+    final knownLore = s['known_lore'] as List<dynamic>? ?? [];
+
+    if (knownLore.isEmpty) {
+      return Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: const [
+            Icon(Icons.book_outlined, color: Color(0xFF2D3A4A), size: 32),
+            SizedBox(height: 8),
+            Text(
+              'No lore discovered yet',
+              style: TextStyle(color: Color(0xFF4A5A72), fontSize: 12),
+            ),
+          ],
+        ),
+      );
+    }
+
+    return ListView.builder(
+      padding: const EdgeInsets.all(12),
+      itemCount: knownLore.length,
+      itemBuilder: (context, i) {
+        final raw = knownLore[i];
+        return _buildLoreEntry(raw);
+      },
+    );
+  }
+
+  Widget _buildLoreEntry(dynamic raw) {
+    Widget content;
+
+    if (raw is String) {
+      // Plain string entry
+      content = Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Icon(Icons.menu_book, color: Color(0xFF4A5A72), size: 14),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              raw,
+              style: const TextStyle(
+                color: Color(0xFF8898B0),
+                fontSize: 11,
+                fontStyle: FontStyle.italic,
+                height: 1.4,
+              ),
+            ),
+          ),
+        ],
+      );
+    } else if (raw is Map<String, dynamic>) {
+      if (raw.containsKey('title') && raw.containsKey('content')) {
+        // Map with title + content
+        content = Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              raw['title'] as String? ?? '',
+              style: const TextStyle(
+                color: Color(0xFFC9A84C),
+                fontSize: 13,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              raw['content'] as String? ?? '',
+              style: const TextStyle(
+                color: Color(0xFF8898B0),
+                fontSize: 11,
+                height: 1.4,
+              ),
+            ),
+          ],
+        );
+      } else if (raw.containsKey('entry')) {
+        // Map with just 'entry'
+        content = Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Icon(Icons.menu_book, color: Color(0xFF4A5A72), size: 14),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                raw['entry'] as String? ?? '',
+                style: const TextStyle(
+                  color: Color(0xFF8898B0),
+                  fontSize: 11,
+                  fontStyle: FontStyle.italic,
+                  height: 1.4,
+                ),
+              ),
+            ),
+          ],
+        );
+      } else {
+        // Fallback for maps with title/body/category (legacy format)
+        final title = raw['title'] as String? ?? 'Unknown';
+        final body = raw['body'] as String? ?? '';
+        final category = raw['category'] as String? ?? 'LORE';
+        content = Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(
+                  title,
+                  style: const TextStyle(
+                    color: Color(0xFFC9A84C),
+                    fontSize: 13,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+                Text(
+                  category,
+                  style: const TextStyle(
+                    color: Color(0xFF4A5A72),
+                    fontSize: 9,
+                    letterSpacing: 1,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 6),
+            Text(
+              body,
+              style: const TextStyle(
+                color: Color(0xFF8898B0),
+                fontSize: 11,
+                height: 1.4,
+              ),
+            ),
+          ],
+        );
+      }
+    } else {
+      return const SizedBox.shrink();
+    }
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: const Color(0xFF1A2230),
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: const Color(0xFF2D3A4A)),
+      ),
+      child: content,
+    );
+  }
+
+  // ── NPCS TAB ────────────────────────────────────────────────────
+
+  Widget _buildNpcsTab(Map<String, dynamic> s) {
+    if (_npcs.isEmpty) {
+      return Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: const [
+            Icon(Icons.groups_outlined, color: Color(0xFF2D3A4A), size: 32),
+            SizedBox(height: 8),
+            Text(
+              'No NPCs encountered yet',
+              style: TextStyle(color: Color(0xFF4A5A72), fontSize: 12),
+            ),
+          ],
+        ),
+      );
+    }
+
+    final relationships = s['relationships'] as Map<String, dynamic>? ?? {};
+
+    int _relScore(String npcId, String npcName) {
+      final byId = relationships[npcId] as Map<String, dynamic>?;
+      if (byId != null) return byId['score'] as int? ?? 0;
+      final byName = relationships[npcName.toLowerCase().replaceAll(' ', '_')] as Map<String, dynamic>?;
+      if (byName != null) return byName['score'] as int? ?? 0;
+      return 0;
+    }
+
+    final allies = _npcs.where((n) => _relScore(n['id'] as String? ?? '', n['name'] as String? ?? '') > 10).toList();
+    final hostile = _npcs.where((n) => _relScore(n['id'] as String? ?? '', n['name'] as String? ?? '') < -10).toList();
+    final neutral = _npcs.where((n) {
+      final score = _relScore(n['id'] as String? ?? '', n['name'] as String? ?? '');
+      return score >= -10 && score <= 10;
+    }).toList();
+
+    Widget npcCard(Map<String, dynamic> npc) {
+      final id = npc['id'] as String? ?? '';
+      final name = npc['name'] as String? ?? 'Unknown';
+      final archetype = npc['archetype'] as String? ?? npc['role'] as String? ?? '';
+      final faction = npc['faction'] as String? ?? '';
+      final score = _relScore(id, name);
+      final color = score > 10
+          ? const Color(0xFF4CAF82)
+          : score < -10
+              ? const Color(0xFFE05555)
+              : const Color(0xFF8898B0);
+
+      // Disposition badge
+      final (badgeLabel, badgeColor) = score > 50
+          ? ('Trusted', const Color(0xFF4CAF82))
+          : score > 10
+              ? ('Friendly', const Color(0xFF2DD4BF))
+              : score < -50
+                  ? ('Hostile', const Color(0xFFE05555))
+                  : ('Neutral', const Color(0xFF4A5A72));
+
+      return Container(
+        margin: const EdgeInsets.only(bottom: 6),
+        padding: const EdgeInsets.all(10),
+        decoration: BoxDecoration(
+          color: const Color(0xFF1A2230),
+          borderRadius: BorderRadius.circular(5),
+          border: Border.all(color: color.withOpacity(0.25)),
+        ),
+        child: Row(
+          children: [
+            Container(
+              width: 6,
+              height: 6,
+              margin: const EdgeInsets.only(right: 8, top: 3),
+              decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+            ),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(name, style: const TextStyle(color: Color(0xFFD4DCE8), fontSize: 12)),
+                      ),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: badgeColor.withOpacity(0.1),
+                          borderRadius: BorderRadius.circular(4),
+                          border: Border.all(color: badgeColor.withOpacity(0.35)),
+                        ),
+                        child: Text(badgeLabel, style: TextStyle(color: badgeColor, fontSize: 9, letterSpacing: 0.5)),
+                      ),
+                    ],
+                  ),
+                  if (archetype.isNotEmpty || faction.isNotEmpty)
+                    Text(
+                      [if (archetype.isNotEmpty) archetype, if (faction.isNotEmpty) faction].join(' · '),
+                      style: const TextStyle(color: Color(0xFF4A5A72), fontSize: 10),
+                    ),
+                ],
+              ),
+            ),
+            Text(
+              score > 0 ? '+$score' : '$score',
+              style: TextStyle(color: color, fontSize: 11, fontFamily: 'monospace'),
+            ),
+          ],
+        ),
+      );
+    }
+
+    return ListView(
+      padding: const EdgeInsets.all(12),
+      children: [
+        if (allies.isNotEmpty) ...[
+          _sectionTitle('Allies'),
+          ...allies.map(npcCard),
+          const SizedBox(height: 12),
+        ],
+        if (neutral.isNotEmpty) ...[
+          _sectionTitle('Neutral'),
+          ...neutral.map(npcCard),
+          const SizedBox(height: 12),
+        ],
+        if (hostile.isNotEmpty) ...[
+          _sectionTitle('Hostile'),
+          ...hostile.map(npcCard),
+        ],
+      ],
+    );
+  }
+
   // ── HELPERS ─────────────────────────────────────────────────────
 
   Widget _sectionTitle(String title) {
@@ -635,13 +1299,17 @@ Future<void> _toggleContentSetting(
             label,
             style: const TextStyle(color: Color(0xFF4A5A72), fontSize: 12),
           ),
-          const Spacer(),
-          Text(
-            value,
-            style: TextStyle(
-              color: valueColor,
-              fontSize: 12,
-              fontFamily: 'monospace',
+          const SizedBox(width: 8),
+          Flexible(
+            child: Text(
+              value,
+              textAlign: TextAlign.right,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                color: valueColor,
+                fontSize: 12,
+                fontFamily: 'monospace',
+              ),
             ),
           ),
         ],

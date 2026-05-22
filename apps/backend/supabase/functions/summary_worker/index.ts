@@ -2,12 +2,34 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 interface SummaryRequest {
-  user_id: string;
+  // user_id intentionally omitted — always derived from the verified JWT
+  character_id: string;
   revision_id: string;
   trigger_type: "hard" | "soft";
-  events: string[];
-  narration_context: string;
-  ollama_url?: string;
+  // ollama_url is intentionally absent — the server reads OLLAMA_URL from env.
+  // Accepting it from the client would allow SSRF (redirecting server fetches
+  // to arbitrary internal URLs).
+}
+
+export function buildFallbackSummary(
+  events: string[],
+  characterName: string,
+  location: string,
+): string {
+  const notable = events
+    .filter((e) =>
+      e.startsWith("STORY_BEAT:") ||
+      e.startsWith("NPC_DEFEATED") ||
+      e.startsWith("QUEST_UPDATED") ||
+      e.startsWith("RELATIONSHIP_TIER_CHANGED:")
+    )
+    .map((e) =>
+      e
+        .replace("STORY_BEAT:", "Beat: ")
+        .replace("RELATIONSHIP_TIER_CHANGED:", "Relationship changed: ")
+    )
+    .join(". ");
+  return notable || `${characterName} continued exploring ${location}.`;
 }
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -20,7 +42,7 @@ function jsonResponse(body: unknown, status = 200): Response {
   });
 }
 
-serve(async (req: Request) => {
+if (import.meta.main) serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
     return new Response("ok", {
       headers: {
@@ -32,11 +54,26 @@ serve(async (req: Request) => {
   }
 
   try {
-    const body: SummaryRequest = await req.json();
-    const { user_id, revision_id, trigger_type, events, narration_context, ollama_url } = body;
+    // ── Identity: always derive user_id from the verified JWT ─────
+    const authHeader = req.headers.get("Authorization");
+    if (!authHeader) return jsonResponse({ error: "No auth header" }, 401);
 
-    if (!user_id || !revision_id) {
-      return jsonResponse({ error: "Missing required fields" }, 400);
+    const userClient = createClient(
+      Deno.env.get("SUPABASE_URL")!,
+      Deno.env.get("SUPABASE_ANON_KEY")!,
+      { global: { headers: { Authorization: authHeader } } },
+    );
+    const { data: { user }, error: userError } = await userClient.auth.getUser();
+    if (userError || !user) return jsonResponse({ error: "Invalid token" }, 401);
+    const user_id = user.id;
+
+    const body: SummaryRequest = await req.json();
+    const { character_id, revision_id, trigger_type } = body;
+    // Server-authoritative Ollama URL — never from client input (SSRF prevention)
+    const ollama_url = Deno.env.get("OLLAMA_URL");
+
+    if (!character_id || !revision_id) {
+      return jsonResponse({ error: "Missing required fields: character_id, revision_id" }, 400);
     }
 
     const supabase = createClient(
@@ -44,17 +81,44 @@ serve(async (req: Request) => {
       Deno.env.get("SVC_ROLE_KEY")!,
     );
 
-    // ── Load canonical state for context ─────────────────────────
+    // ── Load and authenticate the revision ────────────────────────
+    // Reject if revision_id does not belong to this user + character pair.
+    // This prevents the client from submitting a revision_id from another character
+    // and prevents fabricated event lists / injected narration context.
+    const { data: revision, error: revError } = await supabase
+      .from("revisions")
+      .select("id, player_action, success_tier, route_category, events")
+      .eq("id", revision_id)
+      .eq("user_id", user_id)
+      .eq("character_id", character_id)
+      .single();
+
+    if (revError || !revision) {
+      return jsonResponse({ error: "Revision not found or access denied" }, 404);
+    }
+
+    // ── Events are authoritative from the stored revision ─────────
+    const events = (revision.events as string[]) ?? [];
+
+    // ── Load canonical state for character context ─────────────────
     const { data: state } = await supabase
       .from("canonical_state")
       .select("character_name, character_class, current_location, campaign_id, xp, level")
       .eq("user_id", user_id)
+      .eq("character_id", character_id)
       .single();
 
-    // ── Build summary prompt ──────────────────────────────────────
+    // ── Build summary prompt from stored revision data ────────────
     const keyEvents = events
       .filter((e) => !e.startsWith("COMBAT_TURN_RESOLVED"))
       .join(", ");
+
+    // Narration context derived from stored DB fields — not from client submission
+    const serverContext = [
+      `Action: ${revision.player_action}`,
+      `Outcome: ${revision.success_tier}`,
+      keyEvents ? `Events: ${keyEvents}` : "",
+    ].filter(Boolean).join("\n");
 
     const prompt = `You are a dark fantasy chronicle writer. Write a 2-3 sentence summary of what just happened in this RPG session turn. Be specific about what changed. No preamble.
 
@@ -63,14 +127,13 @@ Location: ${state?.current_location}
 Key events this turn: ${keyEvents || "exploration"}
 Trigger: ${trigger_type} summary
 
-Narration context:
-${narration_context.slice(0, 800)}
+Context:
+${serverContext.slice(0, 800)}
 
 Write only the summary, 2-3 sentences maximum.`;
 
     // ── Call Ollama for summary generation ────────────────────────
-    // Note: summary_worker is called from Flutter which passes the
-    // ollama_url since Edge Functions can't reach localhost.
+    // OLLAMA_URL is read from server env — never from the client request.
     let summaryText = "";
 
     if (ollama_url) {
@@ -90,8 +153,8 @@ Write only the summary, 2-3 sentences maximum.`;
         if (ollamaResponse.ok) {
           const data = await ollamaResponse.json();
           const raw = (data.response as string ?? "").trim();
-          if (raw.includes("<tool_call>")) {
-            summaryText = raw.substring(raw.lastIndexOf("<tool_call>") + 8).trim();
+          if (raw.includes("</think>")) {
+            summaryText = raw.substring(raw.lastIndexOf("</think>") + 8).trim();
           } else {
             summaryText = raw;
           }
@@ -103,11 +166,11 @@ Write only the summary, 2-3 sentences maximum.`;
 
     // Fallback: deterministic event-log summary
     if (!summaryText) {
-      const eventSummary = events
-        .filter((e) => e.startsWith("STORY_BEAT:") || e.startsWith("NPC_DEFEATED") || e.startsWith("QUEST_UPDATED") || e.startsWith("RELATIONSHIP_TIER_CHANGED:"))
-        .map((e) => e.replace("STORY_BEAT:", "Beat: ").replace("RELATIONSHIP_TIER_CHANGED:", "Relationship changed: "))
-        .join(". ");
-      summaryText = eventSummary || `${state?.character_name} continued exploring ${state?.current_location}.`;
+      summaryText = buildFallbackSummary(
+        events,
+        state?.character_name ?? "The adventurer",
+        state?.current_location ?? "the area",
+      );
     }
 
     // ── Store summary ─────────────────────────────────────────────

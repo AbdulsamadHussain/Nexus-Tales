@@ -1,5 +1,23 @@
+// @ts-nocheck — Supabase generic type params differ between esm.sh@2 and JSR functions-js; runtime is correct.
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+
+// XP thresholds: level N requires N*100 XP (level 1→2 needs 100, 2→3 needs 200, etc.)
+export function xpForLevel(level: number): number {
+  return level * 100;
+}
+
+export function checkLevelUp(currentXp: number, newXp: number, currentLevel: number): { newLevel: number; didLevelUp: boolean } {
+  let level = currentLevel;
+  let xp = newXp;
+  let didLevelUp = false;
+  while (xp >= xpForLevel(level)) {
+    xp -= xpForLevel(level);
+    level++;
+    didLevelUp = true;
+  }
+  return { newLevel: level, didLevelUp };
+}
 
 type RouteCategory =
   | "NO_ROLL_DETERMINISTIC"
@@ -25,8 +43,11 @@ type SuccessTier =
 
 interface ActionPacket {
   user_id: string;
+  character_id: string;
   player_action: string;
   route_category: RouteCategory;
+  action_type?: string;
+  candidate_skill?: string;
   gateway_decision: GatewayDecision;
   narration_constraints: string[];
   previous_revision_id: string | null;
@@ -48,25 +69,163 @@ interface StateDelta {
   gold?: number;
 }
 
-function generateRevisionId(): string {
+export function generateRevisionId(): string {
   const num = Math.floor(Math.random() * 900000) + 100000;
   return `rev_${num}`;
 }
 
-function rollD20(modifier: number, dc: number): RollResult {
+// ── NPC GENERATION (§B: on-encounter spawn) ──────────────────────
+// When a player interacts with a character that doesn't exist yet,
+// we generate them deterministically from campaign context and save
+// them permanently. The narrator then brings them to life.
+
+const ARCHETYPES: Record<string, { hp: number; is_hostile: boolean; faction: string }> = {
+  innkeeper:    { hp: 18, is_hostile: false, faction: "civilians" },
+  barkeeper:    { hp: 18, is_hostile: false, faction: "civilians" },
+  bartender:    { hp: 18, is_hostile: false, faction: "civilians" },
+  merchant:     { hp: 14, is_hostile: false, faction: "traders" },
+  trader:       { hp: 14, is_hostile: false, faction: "traders" },
+  guard:        { hp: 28, is_hostile: false, faction: "city_watch" },
+  soldier:      { hp: 28, is_hostile: false, faction: "military" },
+  captain:      { hp: 36, is_hostile: false, faction: "military" },
+  blacksmith:   { hp: 22, is_hostile: false, faction: "civilians" },
+  healer:       { hp: 14, is_hostile: false, faction: "civilians" },
+  priest:       { hp: 16, is_hostile: false, faction: "clergy" },
+  noble:        { hp: 18, is_hostile: false, faction: "nobility" },
+  thief:        { hp: 20, is_hostile: true,  faction: "underworld" },
+  bandit:       { hp: 24, is_hostile: true,  faction: "outlaws" },
+  assassin:     { hp: 22, is_hostile: true,  faction: "underworld" },
+  cultist:      { hp: 20, is_hostile: true,  faction: "cult" },
+  beggar:       { hp: 10, is_hostile: false, faction: "civilians" },
+  scholar:      { hp: 12, is_hostile: false, faction: "academy" },
+  wizard:       { hp: 16, is_hostile: false, faction: "academy" },
+  spy:          { hp: 20, is_hostile: false, faction: "shadow_compact" },
+  herbalist:    { hp: 12, is_hostile: false, faction: "civilians" },
+};
+
+const NAMES_BY_TONE: Record<string, string[]> = {
+  grimdark:   ["Varek", "Morne", "Hessa", "Cull", "Drava", "Pitch", "Ulric", "Sable", "Brix", "Wrenn"],
+  epic:       ["Aldara", "Thorn", "Caelith", "Rhovyn", "Serath", "Lyren", "Gaviel", "Auren", "Soleth", "Dawnir"],
+  horror:     ["Pallor", "Vetch", "Mara", "Silas", "Grim", "Ashle", "Nocte", "Hollow", "Vesper", "Cray"],
+  dark_comedy:["Bumble", "Gritch", "Wort", "Snag", "Pell", "Twitch", "Drab", "Mawk", "Jester", "Glib"],
+  gritty:     ["Kael", "Bryn", "Durst", "Milla", "Holt", "Sera", "Finn", "Agna", "Cole", "Rena"],
+  mythic:     ["Elarion", "Thessa", "Voryn", "Calindra", "Aethas", "Myriel", "Solvan", "Yrenna", "Draeven", "Liorel"],
+};
+
+const PERSONALITIES_BY_ARCHETYPE: Record<string, string[]> = {
+  innkeeper:  ["Pragmatic and world-weary. Seen everything, forgets nothing. Generous to paying guests, suspicious of trouble.", "Cheerful in a tired way. Runs a tight house. Values coin and quiet."],
+  merchant:   ["Calculating smile, sharper mind. Everything has a price, including information.", "Cautious and fair. Reputation matters more than any single deal."],
+  guard:      ["Dutiful and watchful. Suspicious of strangers. Will bend rules for the right offer.", "By-the-book and proud of it. Not easily intimidated."],
+  thief:      ["Nervous energy, quick hands. Looking for an angle in every conversation.", "Calm and professional. Does not steal from people he likes."],
+  bandit:     ["Aggressive and territorial. Respects strength, nothing else.", "Opportunistic. Will negotiate if it looks like they might lose."],
+  scholar:    ["Obsessive about their subject. Distracted by everything interesting. Trusts logic over people.", "Careful and precise. Every word chosen deliberately."],
+  healer:     ["Compassionate but blunt. Has seen too much suffering to be sentimental about it.", "Gentle and methodical. Suspicious of violence as a solution."],
+  noble:      ["Polished surface hiding ambition. Speaks in implications, not statements.", "Arrogant but fair. Believes in order above all else."],
+  default:    ["Wary of strangers. Says little until trust is established.", "Pragmatic. Survival-minded. Not easily impressed."],
+};
+
+function pickFromTone<T>(map: Record<string, T[]>, tone: string, seed: number): T {
+  const list = map[tone] ?? map["grimdark"] ?? Object.values(map)[0];
+  return list[seed % list.length];
+}
+
+export function extractCharacterHint(
+  action: string,
+  existingNpcs: Record<string, unknown>[],
+): string | null {
+  const lower = action.toLowerCase();
+
+  // Must be a social/examine action
+  if (!/\b(talk|speak|ask|approach|greet|address|find|look for|meet|confront|question)\b/.test(lower)) {
+    return null;
+  }
+
+  // Extract the character reference — "the innkeeper", "a guard", "old woman", etc.
+  const match = lower.match(
+    /\b(?:talk|speak|ask|approach|greet|address|find|look for|meet|confront|question)\b.{0,30}?\b(?:the|a|an|old|young|nearby|local)?\s*([a-z]+(?:\s+[a-z]+)?)\b/,
+  );
+  if (!match) return null;
+
+  const hint = match[1].trim();
+
+  // Skip pronouns and generic words
+  const skip = ["door", "room", "wall", "floor", "area", "place", "chest", "item", "around", "about"];
+  if (skip.includes(hint)) return null;
+
+  // Check if this is already an existing NPC
+  const alreadyExists = existingNpcs.some((npc) => {
+    const name = (npc.name as string ?? "").toLowerCase();
+    return name.includes(hint) || hint.includes(name.split(" ")[0]);
+  });
+
+  if (alreadyExists) return null;
+
+  return hint; // e.g. "innkeeper", "old guard", "merchant"
+}
+
+export function buildNpcData(
+  hint: string,
+  campaignId: string,
+  sceneId: string,
+  narratorTone: string,
+  seed: number,
+): Record<string, unknown> {
+  // Find closest archetype
+  const archetypeKey = Object.keys(ARCHETYPES).find((k) => hint.includes(k)) ?? "default";
+  const archetype = ARCHETYPES[archetypeKey] ?? { hp: 16, is_hostile: false, faction: "civilians" };
+
+  const name = pickFromTone(NAMES_BY_TONE, narratorTone, seed);
+  const personalityPool = PERSONALITIES_BY_ARCHETYPE[archetypeKey] ?? PERSONALITIES_BY_ARCHETYPE.default;
+  const personality = personalityPool[seed % personalityPool.length];
+
+  // Build description from hint + tone flavour
+  const toneFlour = narratorTone === "grimdark" ? "worn and guarded"
+    : narratorTone === "horror" ? "unsettling in an indefinable way"
+    : narratorTone === "epic" ? "bearing themselves with quiet purpose"
+    : narratorTone === "dark_comedy" ? "looking slightly out of place"
+    : narratorTone === "mythic" ? "with an air of ancient knowing"
+    : "unremarkable at first glance";
+
+  const npcId = `npc_gen_${campaignId.slice(-8)}_${hint.replace(/\s+/g, "_")}_${seed}`;
+
+  return {
+    id: npcId,
+    campaign_id: campaignId,
+    name,
+    description: `A ${hint}, ${toneFlour}. Met in ${sceneId.replace(/_/g, " ")}.`,
+    personality,
+    hp: archetype.hp,
+    hp_max: archetype.hp,
+    attack_damage: archetype.is_hostile ? 5 : 0,
+    faction: archetype.faction,
+    is_hostile: archetype.is_hostile,
+    loot: [],
+    scene_id: sceneId,
+  };
+}
+
+export function rollD20(modifier: number, dc: number): RollResult {
   const die = Math.floor(Math.random() * 20) + 1;
   const total = die + modifier;
   let tier: SuccessTier;
-  if (die === 20 || total >= dc + 6) tier = "CRITICAL_SUCCESS";
+  if (die === 1) tier = "CRITICAL_FAILURE";
+  else if (die === 20 || total >= dc + 6) tier = "CRITICAL_SUCCESS";
   else if (total >= dc) tier = "FULL_SUCCESS";
   else if (total >= dc - 4) tier = "PARTIAL_SUCCESS";
-  else if (die === 1 || total <= dc - 8) tier = "CRITICAL_FAILURE";
+  else if (total <= dc - 8) tier = "CRITICAL_FAILURE";
   else tier = "FAILURE";
   return { die, modifier, total, dc, tier };
 }
 
-function computeDelta(
+// ── NPC COUNTER-ATTACK DAMAGE ─────────────────────────────────────
+// Reads attack_damage from NPC data, falls back to 5 if not set.
+export function getNpcCounterDamage(npc: Record<string, unknown>): number {
+  return (npc.attack_damage as number) ?? 5;
+}
+
+export function computeDelta(
   action: string,
+  actionType: string | undefined,
   roll: RollResult | null,
   npcsInScene: Record<string, unknown>[],
   npcStates: Record<string, unknown>,
@@ -75,60 +234,58 @@ function computeDelta(
   delta: StateDelta;
   events: string[];
   npcStateUpdates: Record<string, unknown>;
+  combatNarrationHints: string[];
 } {
   const lower = action.toLowerCase();
   const delta: StateDelta = {};
   const events: string[] = [];
   const npcStateUpdates: Record<string, unknown> = {};
+  const combatNarrationHints: string[] = [];
+
+  const isRest = actionType === "REST" || /\b(rest|sit|breathe|recover|catch my breath|take a moment|take a break|meditate|sleep|wait)\b/.test(lower);
+  const isUseItem = actionType === "USE_ITEM" || /\b(use|drink|apply|consume)\b.*(salve|potion|vial|healing|remedy|bandage)/.test(lower) || /\b(healing salve|health potion)\b/.test(lower);
+  const isAttack = actionType === "ATTACK" || /attack|strike|stab|charge|backstab|slash|punch|kick/.test(lower);
+  const isStealth = actionType === "STEALTH" || /sneak|hide|shadow/.test(lower);
+  const isSkillCheck = actionType === "SKILL_CHECK" || /pick lock|lockpick|search|examine|investigate/.test(lower);
 
   // ── REST / RECOVERY ───────────────────────────────────────────
-  if (
-    /\b(rest|sit|breathe|recover|catch my breath|take a moment|take a break|meditate|sleep|wait)\b/
-      .test(lower)
-  ) {
+  if (isRest) {
     delta.stamina = 8;
     delta.hp = 2;
     events.push("PLAYER_RESTED");
-    return { delta, events, npcStateUpdates };
+    return { delta, events, npcStateUpdates, combatNarrationHints };
   }
 
   // ── CONSUMABLE USE ────────────────────────────────────────────
-  if (
-    /\b(use|drink|apply|consume)\b.*(salve|potion|vial|healing|remedy|bandage)/
-      .test(lower) ||
-    /\b(healing salve|health potion)\b/.test(lower)
-  ) {
+  if (isUseItem) {
     events.push("ITEM_USED");
     // Actual item consumption handled in main flow — flag here for routing
     delta.hp = 12;
-    return { delta, events, npcStateUpdates };
+    return { delta, events, npcStateUpdates, combatNarrationHints };
   }
 
   // ── STAMINA COSTS ─────────────────────────────────────────────
-  if (/attack|strike|stab|charge|backstab|slash|punch|kick/.test(lower)) {
+  if (isAttack) {
     delta.stamina = -3;
     events.push("COMBAT_TURN_RESOLVED");
-  } else if (/sneak|hide|shadow/.test(lower)) {
+  } else if (isStealth) {
     delta.stamina = -2;
     events.push("STEALTH_ATTEMPTED");
-  } else if (/pick lock|lockpick/.test(lower)) {
-    delta.stamina = -1;
-    events.push("SKILL_CHECK");
-  } else if (/search|examine|investigate/.test(lower)) {
+  } else if (isSkillCheck) {
     delta.stamina = -1;
     events.push("SKILL_CHECK");
   }
 
-  // Roll outcomes
+  // ── ROLL OUTCOMES ─────────────────────────────────────────────
   if (roll) {
-    const isAttack = /attack|strike|stab|slash|backstab|punch|kick/.test(lower);
     if (isAttack && delta.stamina === undefined) {
       delta.stamina = -3;
     }
+
     if (roll.tier === "CRITICAL_SUCCESS") {
       delta.xp = 30;
-      if (/attack|strike|stab|slash|backstab/.test(lower)) {
-        // Deal damage to hostile NPC
+      if (isAttack) {
+        // Deal damage to hostile NPC — no counter on critical success
         const targetNpc = findTargetNpc(lower, npcsInScene);
         if (targetNpc) {
           const npcId = targetNpc.id as string;
@@ -146,7 +303,8 @@ function computeDelta(
       }
     } else if (roll.tier === "FULL_SUCCESS") {
       delta.xp = 20;
-      if (/attack|strike|stab|slash/.test(lower)) {
+      if (isAttack) {
+        // Deal damage to hostile NPC — no counter on full success
         const targetNpc = findTargetNpc(lower, npcsInScene);
         if (targetNpc) {
           const npcId = targetNpc.id as string;
@@ -161,11 +319,11 @@ function computeDelta(
           if (newHp <= 0) events.push("NPC_DEFEATED");
         }
       }
-      if (/pick lock|search|examine/.test(lower)) events.push("QUEST_UPDATED");
+      if (isSkillCheck && /pick lock|search|examine/.test(lower)) events.push("QUEST_UPDATED");
     } else if (roll.tier === "PARTIAL_SUCCESS") {
-      delta.hp = -4;
       delta.xp = 10;
-      if (/attack|strike|stab/.test(lower)) {
+      if (isAttack) {
+        // Player deals reduced damage to NPC
         const targetNpc = findTargetNpc(lower, npcsInScene);
         if (targetNpc) {
           const npcId = targetNpc.id as string;
@@ -179,22 +337,70 @@ function computeDelta(
           };
           if (newHp <= 0) events.push("NPC_DEFEATED");
         }
+        // NPC counter-attacks on partial success
+        const hostileNpc = npcsInScene.find(
+          (n) =>
+            n.is_hostile === true &&
+            !(npcStates[n.id as string] as Record<string, unknown>)?.is_dead,
+        );
+        if (hostileNpc) {
+          const counterDamage = getNpcCounterDamage(hostileNpc);
+          delta.hp = -counterDamage;
+          events.push("NPC_COUNTER_ATTACKED");
+          combatNarrationHints.push(
+            `NPC_COUNTER_ATTACK:${hostileNpc.name} strikes back for ${counterDamage} damage.`,
+          );
+        }
+      } else {
+        // Non-attack partial success — minor setback, no counter
+        delta.hp = -3;
       }
     } else if (roll.tier === "FAILURE") {
-      delta.hp = -5;
       delta.xp = 5;
+      // NPC counter-attacks on failure — heavier damage
+      const hostileNpc = npcsInScene.find(
+        (n) =>
+          n.is_hostile === true &&
+          !(npcStates[n.id as string] as Record<string, unknown>)?.is_dead,
+      );
+      if (hostileNpc) {
+        const counterDamage = Math.round(getNpcCounterDamage(hostileNpc) * 1.5);
+        delta.hp = -counterDamage;
+        events.push("NPC_COUNTER_ATTACKED");
+        combatNarrationHints.push(
+          `NPC_COUNTER_ATTACK:${hostileNpc.name} counter-attacks for ${counterDamage} damage.`,
+        );
+      } else {
+        delta.hp = -5;
+      }
     } else if (roll.tier === "CRITICAL_FAILURE") {
-      delta.hp = -10;
       delta.xp = 5;
       events.push("PLAYER_INJURED");
+      // NPC deals devastating counter damage on critical failure
+      const hostileNpc = npcsInScene.find(
+        (n) =>
+          n.is_hostile === true &&
+          !(npcStates[n.id as string] as Record<string, unknown>)?.is_dead,
+      );
+      if (hostileNpc) {
+        const counterDamage = getNpcCounterDamage(hostileNpc) * 2;
+        delta.hp = -counterDamage;
+        events.push("NPC_COUNTER_ATTACKED");
+        combatNarrationHints.push(
+          `NPC_COUNTER_ATTACK:${hostileNpc.name} lands a devastating blow for ${counterDamage} damage.`,
+        );
+      } else {
+        delta.hp = -10;
+      }
     }
   }
 
-  return { delta, events, npcStateUpdates };
+  return { delta, events, npcStateUpdates, combatNarrationHints };
 }
 
-// Find which NPC the player is targeting based on action text
-function findTargetNpc(
+// ── FIND TARGET NPC ───────────────────────────────────────────────
+// Find which NPC the player is targeting based on action text.
+export function findTargetNpc(
   action: string,
   npcsInScene: Record<string, unknown>[],
 ): Record<string, unknown> | null {
@@ -208,8 +414,9 @@ function findTargetNpc(
   return hostile ?? null;
 }
 
-// Get current NPC HP from npc_states (tracks damage across turns)
-function getNpcHp(
+// ── GET NPC HP ────────────────────────────────────────────────────
+// Get current NPC HP from npc_states (tracks damage across turns).
+export function getNpcHp(
   npcId: string,
   npc: Record<string, unknown>,
   npcStates: Record<string, unknown>,
@@ -276,14 +483,22 @@ function computeRelationshipDelta(
   };
 }
 
-// Check if a relationship score crosses a tier threshold
-function getRelationshipTier(score: number): string {
+// ── RELATIONSHIP TIER ─────────────────────────────────────────────
+export function getRelationshipTier(score: number): string {
   if (score <= -51) return "Hostile";
   if (score <= -11) return "Distrustful";
   if (score <= 10) return "Neutral";
   if (score <= 40) return "Warm";
   if (score <= 75) return "Loyal";
   return "Devoted";
+}
+
+export function getNpcRelationshipScore(
+  npcId: string,
+  relationships: Record<string, unknown>,
+): number {
+  const rel = relationships[npcId] as Record<string, unknown> | undefined;
+  return (rel?.score as number) ?? 0;
 }
 
 // ── CHECK STORY BEATS ─────────────────────────────────────────────
@@ -293,6 +508,7 @@ function getRelationshipTier(score: number): string {
 async function checkStoryBeats(
   supabase: ReturnType<typeof createClient>,
   userId: string,
+  characterId: string,
   campaignId: string,
   events: string[],
   state: Record<string, unknown>,
@@ -339,6 +555,7 @@ async function checkStoryBeats(
       );
       if (hasItem) triggered = true;
     }
+
     if (triggered) {
       fired.push(beat.id);
       const consequences = beat.consequences as Record<string, unknown>;
@@ -364,6 +581,7 @@ async function checkStoryBeats(
             .from("canonical_state")
             .select("inventory")
             .eq("user_id", userId)
+            .eq("character_id", characterId)
             .single();
 
           console.log(
@@ -378,7 +596,8 @@ async function checkStoryBeats(
           const { error: updateError } = await supabase
             .from("canonical_state")
             .update({ inventory: newInventory })
-            .eq("user_id", userId);
+            .eq("user_id", userId)
+            .eq("character_id", characterId);
 
           console.log("Inventory update error:", JSON.stringify(updateError));
         }
@@ -390,12 +609,13 @@ async function checkStoryBeats(
         await supabase
           .from("canonical_state")
           .update({ current_location: newScene })
-          .eq("user_id", userId);
+          .eq("user_id", userId)
+          .eq("character_id", characterId);
 
         await supabase
           .from("player_campaign_state")
           .update({ current_scene: newScene })
-          .eq("user_id", userId)
+          .eq("character_id", characterId)
           .eq("campaign_id", campaignId);
 
         narrationHints.push(`SCENE_TRANSITION:${newScene}`);
@@ -408,6 +628,7 @@ async function checkStoryBeats(
           .from("canonical_state")
           .select("quest_state")
           .eq("user_id", userId)
+          .eq("character_id", characterId)
           .single();
 
         const questState =
@@ -417,7 +638,8 @@ async function checkStoryBeats(
         await supabase
           .from("canonical_state")
           .update({ quest_state: questState })
-          .eq("user_id", userId);
+          .eq("user_id", userId)
+          .eq("character_id", characterId);
       }
     }
   }
@@ -430,7 +652,7 @@ async function checkStoryBeats(
         beaten_beats: [...beatenBeats, ...fired],
         last_played_at: new Date().toISOString(),
       })
-      .eq("user_id", userId)
+      .eq("character_id", characterId)
       .eq("campaign_id", campaignId);
   }
 
@@ -474,8 +696,8 @@ function buildNarrationContext(
       const npcId = npc.id as string;
       const trackedState =
         (npcStateUpdates as Record<string, unknown>)[npcId] as
-          | Record<string, unknown>
-          | undefined;
+        | Record<string, unknown>
+        | undefined;
       const currentHp = trackedState?.hp ?? npc.hp_max ?? npc.hp;
       const isDead = trackedState?.is_dead ?? false;
       const status = isDead ? "DEFEATED" : `HP: ${currentHp}/${npc.hp_max}`;
@@ -499,8 +721,13 @@ function buildNarrationContext(
     const sceneTransitions = narrationHints.filter((h) =>
       h.startsWith("SCENE_TRANSITION:")
     );
-    const otherHints = narrationHints.filter((h) =>
-      !h.startsWith("SCENE_TRANSITION:")
+    const counterAttacks = narrationHints.filter((h) =>
+      h.startsWith("NPC_COUNTER_ATTACK:")
+    );
+    const storyHints = narrationHints.filter(
+      (h) =>
+        !h.startsWith("SCENE_TRANSITION:") &&
+        !h.startsWith("NPC_COUNTER_ATTACK:"),
     );
 
     if (sceneTransitions.length > 0) {
@@ -511,9 +738,18 @@ function buildNarrationContext(
         `Narrate the transition dramatically — describe leaving the old location and arriving somewhere new.\n`;
     }
 
-    if (otherHints.length > 0) {
+    if (counterAttacks.length > 0) {
+      ctx += `\n=== NPC COUNTER-ATTACK ===\n`;
+      ctx += counterAttacks
+        .map((h) => h.replace("NPC_COUNTER_ATTACK:", ""))
+        .join("\n") + "\n";
+      ctx +=
+        `Narrate the NPC's counter-attack vividly — the player took this damage.\n`;
+    }
+
+    if (storyHints.length > 0) {
       ctx += `\n=== STORY BEAT TRIGGERED ===\n`;
-      ctx += otherHints.join("\n") + "\n";
+      ctx += storyHints.join("\n") + "\n";
     }
   }
 
@@ -534,7 +770,7 @@ function buildNarrationContext(
 // Returns whether a summary job should be queued this turn,
 // and updates the turn counter + cooldown on canonical_state.
 
-async function evaluateSummaryTrigger(
+export async function evaluateSummaryTrigger(
   supabase: ReturnType<typeof createClient>,
   userId: string,
   events: string[],
@@ -574,9 +810,95 @@ async function evaluateSummaryTrigger(
   return { shouldQueue, isHard, newTurnCount, newCooldown };
 }
 
+// ── CODEX ──────────────────────────────────────────────────
+// Writes lore entries to known_lore on real discovery events.
+// Only writes entries the player doesn't already have (deduped by id).
+
+async function updateCodex(
+  supabase: ReturnType<typeof createClient>,
+  userId: string,
+  characterId: string,
+  events: string[],
+  npcsInScene: Record<string, unknown>[],
+  scene: Record<string, unknown> | null,
+  currentKnownLore: unknown[],
+  revisionId: string,
+  npcStateUpdates: Record<string, unknown>,
+  roll: RollResult | null,
+  playerAction: string,
+): Promise<void> {
+  const existingIds = new Set(
+    (currentKnownLore as Record<string, unknown>[]).map((e) => e.id as string),
+  );
+  const newEntries: Record<string, unknown>[] = [];
+
+  // NPC first encounter
+  for (const npc of npcsInScene) {
+    const npcId = npc.id as string;
+    const isDead =
+      (npcStateUpdates[npcId] as Record<string, unknown>)?.is_dead ?? false;
+    if (!existingIds.has(npcId) && !isDead) {
+      newEntries.push({
+        id: npcId,
+        title: npc.name,
+        category: "NPC",
+        body: `${npc.description} ${npc.personality}`,
+        discovered_at: revisionId,
+      });
+      existingIds.add(npcId);
+    }
+  }
+
+  // Location first visit
+  if (scene) {
+    const sceneId = scene.id as string;
+    if (!existingIds.has(sceneId)) {
+      newEntries.push({
+        id: sceneId,
+        title: scene.title,
+        category: "LOCATION",
+        body: scene.description as string,
+        discovered_at: revisionId,
+      });
+      existingIds.add(sceneId);
+    }
+  }
+
+  // Successful search or investigate
+  const lower = playerAction.toLowerCase();
+  if (
+    /search|investigate|examine/.test(lower) &&
+    roll &&
+    (roll.tier === "FULL_SUCCESS" || roll.tier === "CRITICAL_SUCCESS")
+  ) {
+    const sceneId = scene ? scene.id as string : "unknown_area";
+    const loreId = `lore_search_${sceneId}`;
+    if (!existingIds.has(loreId)) {
+      newEntries.push({
+        id: loreId,
+        title: "Discovery",
+        category: "LORE",
+        body: `A successful search in ${scene?.title ?? "the area"} revealed hidden details.`,
+        discovered_at: revisionId,
+      });
+      existingIds.add(loreId);
+    }
+  }
+
+  if (newEntries.length === 0) return;
+
+  const updatedLore = [...(currentKnownLore as unknown[]), ...newEntries];
+  await supabase
+    .from("canonical_state")
+    .update({ known_lore: updatedLore })
+    .eq("user_id", userId)
+    .eq("character_id", characterId);
+}
+
+
 // ── MAIN ─────────────────────────────────────────────────────────
 
-serve(async (req: Request) => {
+if (import.meta.main) serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
     return new Response("ok", {
       headers: {
@@ -587,12 +909,26 @@ serve(async (req: Request) => {
     });
   }
 
+  // ── Internal-only: only turn_orchestrator may call this ──────────
+  // Clients hold the anon key; only server-side functions hold SVC_ROLE_KEY.
+  const authHeader = req.headers.get("Authorization") ?? "";
+  const serviceKey = Deno.env.get("SVC_ROLE_KEY") ?? "";
+  if (!serviceKey || authHeader !== `Bearer ${serviceKey}`) {
+    return new Response(JSON.stringify({ error: "Internal endpoint only" }), {
+      status: 403,
+      headers: { "Content-Type": "application/json" },
+    });
+  }
+
   try {
     const packet: ActionPacket = await req.json();
     const {
       user_id,
+      character_id,
       player_action,
       route_category,
+      action_type,
+      candidate_skill,
       gateway_decision,
       previous_revision_id,
     } = packet;
@@ -614,6 +950,7 @@ serve(async (req: Request) => {
       .from("canonical_state")
       .select("*")
       .eq("user_id", user_id)
+      .eq("character_id", character_id)
       .single();
 
     if (stateError || !state) {
@@ -645,11 +982,55 @@ serve(async (req: Request) => {
       npcsInScene = npcs || [];
     }
 
+    // ── 2b. On-encounter NPC generation ──────────────────────────
+    // For SPEAK/EXAMINE actions in custom campaigns, detect unknown
+    // character references and spawn them permanently.
+    const hint = extractCharacterHint(player_action, npcsInScene);
+    if (hint && state.campaign_id) {
+      // Load campaign to get narrator_tone
+      const { data: campaign } = await supabase
+        .from("campaigns")
+        .select("narrator_tone, is_custom")
+        .eq("id", state.campaign_id)
+        .maybeSingle();
+
+      // Only auto-generate for custom campaigns (curated ones are pre-authored)
+      if (campaign?.is_custom) {
+        const seed = Date.now() % 1000;
+        const npcData = buildNpcData(
+          hint,
+          state.campaign_id,
+          state.current_location,
+          campaign.narrator_tone ?? "grimdark",
+          seed,
+        );
+
+        // Check NPC doesn't already exist (race condition guard)
+        const { data: existing } = await supabase
+          .from("npcs")
+          .select("id")
+          .eq("id", npcData.id)
+          .maybeSingle();
+
+        if (!existing) {
+          const { id: npcId, scene_id: _sid, ...npcRow } = npcData;
+          await supabase.from("npcs").insert({ id: npcId, ...npcRow });
+          await supabase.from("scene_npcs").insert({
+            scene_id: state.current_location,
+            npc_id: npcId,
+            spawn_condition: { generated: true, hint },
+          });
+          // Add to the in-memory list for this turn
+          npcsInScene.push({ id: npcId, ...npcRow });
+        }
+      }
+    }
+
     // ── 3. Load or create player campaign state ───────────────────
     let { data: campaignState } = await supabase
       .from("player_campaign_state")
       .select("*")
-      .eq("user_id", user_id)
+      .eq("character_id", character_id)
       .eq("campaign_id", state.campaign_id)
       .maybeSingle();
 
@@ -658,6 +1039,7 @@ serve(async (req: Request) => {
         .from("player_campaign_state")
         .insert({
           user_id,
+          character_id: character_id,
           campaign_id: state.campaign_id,
           current_scene: state.current_location,
           beaten_beats: [],
@@ -670,41 +1052,59 @@ serve(async (req: Request) => {
     }
 
     // ── 4. Roll if required ───────────────────────────────────────
-    // ── 4. Roll if required ───────────────────────────────────────
     let roll: RollResult | null = null;
     if (route_category === "ROLL_REQUIRED") {
       const skills = (state.skills as Record<string, number>) ?? {};
       const lower = player_action.toLowerCase();
 
-      // Pick the most relevant skill for this action
       let modifier = 3; // base
-      if (/attack|strike|stab|slash|backstab/.test(lower)) {
-        modifier = skills.dagger ?? skills.melee ?? skills.strength ?? 3;
-      } else if (/sneak|hide|shadow/.test(lower)) {
-        modifier = skills.stealth ?? 3;
-      } else if (/pick lock|lockpick/.test(lower)) {
-        modifier = skills.lockpick ?? 3;
-      } else if (/persuade|intimidate|deceive|bluff/.test(lower)) {
-        modifier = skills.persuasion ?? skills.intimidate ?? 3;
-      } else if (/search|investigate/.test(lower)) {
-        modifier = skills.perception ?? 3;
+      if (candidate_skill && skills[candidate_skill] !== undefined) {
+        modifier = skills[candidate_skill];
+      } else {
+        if (action_type === "ATTACK" || /attack|strike|stab|slash|backstab/.test(lower)) {
+          modifier = skills.dagger ?? skills.melee ?? skills.strength ?? 3;
+        } else if (action_type === "STEALTH" || /sneak|hide|shadow/.test(lower)) {
+          modifier = skills.stealth ?? 3;
+        } else if (action_type === "SKILL_CHECK") {
+          if (/pick lock|lockpick/.test(lower)) modifier = skills.lockpick ?? 3;
+          else if (/persuade|intimidate|deceive|bluff/.test(lower)) modifier = skills.persuasion ?? skills.intimidate ?? 3;
+          else if (/search|investigate/.test(lower)) modifier = skills.perception ?? 3;
+          else modifier = 3;
+        }
       }
 
       const dc = 14;
       roll = rollD20(modifier, dc);
+
+      // Apply NPC relationship modifier to roll outcome
+      const relationships = (state.relationships as Record<string, unknown>) ?? {};
+      if (roll && npcsInScene.length > 0) {
+        const targetNpc = findTargetNpc(player_action, npcsInScene);
+        if (targetNpc) {
+          const score = getNpcRelationshipScore(targetNpc.id as string, relationships);
+          // Trusted NPC: upgrade tier slightly (reluctant to fight)
+          if (score > 50 && roll.tier === 'PARTIAL_SUCCESS') roll.tier = 'FULL_SUCCESS';
+          if (score > 50 && roll.tier === 'FAILURE') roll.tier = 'PARTIAL_SUCCESS';
+          // Hostile NPC: downgrade tier (fights harder)
+          if (score < -50 && roll.tier === 'FULL_SUCCESS') roll.tier = 'PARTIAL_SUCCESS';
+          if (score < -50 && roll.tier === 'CRITICAL_SUCCESS') roll.tier = 'FULL_SUCCESS';
+        }
+      }
     }
-    // ── 5. Compute consequences ───────────────────────────────────
-    // ── 5. Compute consequences ───────────────────────────────────
+
     const npcStates = (campaignState?.npc_states as Record<string, unknown>) ??
       {};
     const characterSkills = (state.skills as Record<string, number>) ?? {};
-    const { delta, events, npcStateUpdates } = computeDelta(
-      player_action,
-      roll,
-      npcsInScene,
-      npcStates,
-      characterSkills,
-    );
+    const { delta, events, npcStateUpdates, combatNarrationHints } =
+      computeDelta(
+        player_action,
+        action_type,
+        roll,
+        npcsInScene,
+        npcStates,
+        characterSkills,
+      );
+
     // ── 6. Apply delta to canonical state ─────────────────────────
     const updatedState: Record<string, number> = {};
     if (delta.hp !== undefined) {
@@ -727,10 +1127,24 @@ serve(async (req: Request) => {
     }
     if (delta.xp !== undefined) {
       updatedState.xp = state.xp + delta.xp;
+      const { newLevel, didLevelUp } = checkLevelUp(state.xp, updatedState.xp, state.level ?? 1);
+      if (didLevelUp) {
+        updatedState.level = newLevel;
+        updatedState.hp_max = (state.hp_max ?? 40) + 5;
+        updatedState.mp_max = (state.mp_max ?? 20) + 2;
+        updatedState.stamina_max = (state.stamina_max ?? 20) + 2;
+        updatedState.hp = updatedState.hp_max;
+        updatedState.mp = updatedState.mp_max;
+        updatedState.stamina = updatedState.stamina_max;
+        events.push(`LEVEL_UP:${newLevel}`);
+      }
     }
     if (delta.gold !== undefined) {
       updatedState.gold = state.gold + delta.gold;
     }
+
+    // Increment turn_count for opening narration check
+    updatedState.turn_count = (state.turn_count ?? 0) + 1;
 
     // ── 6b. Save NPC state updates ────────────────────────────────
     const mergedNpcStates = { ...npcStates, ...npcStateUpdates };
@@ -741,7 +1155,7 @@ serve(async (req: Request) => {
           npc_states: mergedNpcStates,
           last_played_at: new Date().toISOString(),
         })
-        .eq("user_id", user_id)
+        .eq("character_id", character_id)
         .eq("campaign_id", state.campaign_id);
     }
 
@@ -783,7 +1197,8 @@ serve(async (req: Request) => {
           await supabase
             .from("canonical_state")
             .update({ inventory: newInventory })
-            .eq("user_id", user_id);
+            .eq("user_id", user_id)
+            .eq("character_id", character_id);
 
           events.push("ITEM_CONSUMED");
         } else {
@@ -822,7 +1237,8 @@ serve(async (req: Request) => {
       await supabase
         .from("canonical_state")
         .update({ relationships })
-        .eq("user_id", user_id);
+        .eq("user_id", user_id)
+        .eq("character_id", character_id);
 
       // Emit tier change event if threshold crossed
       if (oldTier !== newTier) {
@@ -832,30 +1248,74 @@ serve(async (req: Request) => {
       }
     }
 
+    // ── 6e. Proactive aggression from deeply hostile NPCs ─────────
+    // IMPORTANT: apply directly to updatedState.hp — delta.hp was already
+    // used to compute updatedState above so mutating delta here has no effect.
+    {
+      const relationships = (state.relationships as Record<string, unknown>) ?? {};
+      for (const npc of npcsInScene) {
+        if (npc.is_hostile && !(npcStateUpdates[npc.id as string] as Record<string, unknown> | undefined)?.is_dead) {
+          const score = getNpcRelationshipScore(npc.id as string, relationships);
+          if (score < -75) {
+            const aggrDmg = Math.floor(getNpcCounterDamage(npc) * 0.5);
+            // Apply to the state that will actually be written to DB
+            const baseHp = updatedState.hp ?? state.hp;
+            updatedState.hp = Math.max(0, baseHp - aggrDmg);
+            // Keep delta in sync so narration context reflects the true damage
+            delta.hp = (delta.hp ?? 0) - aggrDmg;
+            events.push(`HOSTILE_AGGRESSION:${npc.name ?? npc.id}`);
+            break; // one aggression per turn max
+          }
+        }
+      }
+    }
+
     // ── 7. Write canonical state ──────────────────────────────────
+    const revision_id = generateRevisionId();
     const { error: updateError } = await supabase
       .from("canonical_state")
       .update({ ...updatedState, updated_at: new Date().toISOString() })
-      .eq("user_id", user_id);
+      .eq("user_id", user_id)
+      .eq("character_id", character_id);
 
     if (updateError) throw updateError;
 
-    // ── 8. Check story beats ──────────────────────────────────────
-    const { fired: beatsFired, narrationHints } = await checkStoryBeats(
+    // ── 7b. Update codex on discovery events ─────────────────────
+    await updateCodex(
       supabase,
       user_id,
-      state.campaign_id,
+      character_id,
       events,
-      { ...state, ...updatedState },
-      {
-        ...(campaignState || {}),
-        npc_states: mergedNpcStates,
-      },
+      npcsInScene,
+      scene,
+      (state.known_lore as unknown[]) ?? [],
+      revision_id,
+      npcStateUpdates,
+      roll,
+      player_action,
     );
+
+    // ── 8. Check story beats ──────────────────────────────────────
+    const { fired: beatsFired, narrationHints: beatNarrationHints } =
+      await checkStoryBeats(
+        supabase,
+        user_id,
+        character_id,
+        state.campaign_id,
+        events,
+        { ...state, ...updatedState },
+        {
+          ...(campaignState || {}),
+          npc_states: mergedNpcStates,
+        },
+      );
 
     if (beatsFired.length > 0) {
       events.push(...beatsFired.map((id) => `STORY_BEAT:${id}`));
     }
+
+    // Merge story beat hints with combat counter-attack hints
+    const narrationHints = [...beatNarrationHints, ...combatNarrationHints];
 
     // ── 8b. Evaluate summary trigger ─────────────────────────────
     const turnsSinceSummary = (state.turns_since_last_summary as number) ?? 0;
@@ -880,11 +1340,12 @@ serve(async (req: Request) => {
           ? (isHard ? "hard" : "soft")
           : state.last_summary_type,
       })
-      .eq("user_id", user_id);
+      .eq("user_id", user_id)
+      .eq("character_id", character_id);
 
     // ── 9. Commit revision ────────────────────────────────────────
-    const revision_id = generateRevisionId();
-    const autosave_candidate = events.some((e) => e.startsWith("STORY_BEAT")) ||
+    const autosave_candidate =
+      events.some((e) => e.startsWith("STORY_BEAT")) ||
       events.includes("QUEST_UPDATED") ||
       events.includes("COMBAT_TURN_RESOLVED") ||
       events.includes("PLAYER_INJURED");
@@ -894,6 +1355,7 @@ serve(async (req: Request) => {
       .insert({
         id: revision_id,
         user_id,
+        character_id,
         previous_id: previous_revision_id,
         schema_version: 1,
         player_action,
@@ -912,6 +1374,7 @@ serve(async (req: Request) => {
       });
 
     if (revError) throw revError;
+
     // ── 10. Insert canonical events ───────────────────────────────
     if (events.length > 0) {
       await supabase.from("canonical_events").insert(
