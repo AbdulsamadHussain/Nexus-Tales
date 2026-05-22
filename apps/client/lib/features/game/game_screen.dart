@@ -91,7 +91,6 @@ class _GameScreenState extends ConsumerState<GameScreen> {
 
   Future<void> _loadNpcStates() async {
     if (_canonicalState == null) return;
-    final user = Supabase.instance.client.auth.currentUser!;
     final campaignId = _canonicalState!['campaign_id'] as String?;
     final location = _canonicalState!['current_location'] as String?;
     if (campaignId == null || location == null) return;
@@ -1507,8 +1506,7 @@ Input: "the cabinet I need what is inside" → {"route": "ROLL_REQUIRED", "actio
           'character_id': widget.characterId,
           'revision_id': data['revision_id'],
           'trigger_type': 'hard',
-          'events': data['events'],
-          'narration_context': data['narration_context'] ?? '',
+          // events and narration_context are loaded server-side from the stored revision
           'ollama_url': 'http://localhost:11434',
         },
       );
@@ -1660,15 +1658,19 @@ Input: "the cabinet I need what is inside" → {"route": "ROLL_REQUIRED", "actio
     );
 
     if (chosen != null && mounted) {
-      // Save skill to canonical_state
-      final user = Supabase.instance.client.auth.currentUser!;
-      final skills = Map<String, dynamic>.from((_canonicalState?['skills'] as Map?)?.cast<String, dynamic>() ?? {});
-      skills[chosen['id'] as String] = {'name': chosen['name'], 'desc': chosen['desc'], 'unlocked_at_level': newLevel};
-      await Supabase.instance.client
-          .from('canonical_state')
-          .update({'skills': skills})
-          .eq('user_id', user.id)
-          .eq('character_id', widget.characterId);
+      // Skill choice goes through canonical_command — server validates class + level-up slot
+      try {
+        await Supabase.instance.client.functions.invoke(
+          'canonical_command',
+          body: {
+            'character_id': widget.characterId,
+            'command': 'CHOOSE_SKILL',
+            'skill_id': chosen['id'] as String,
+          },
+        );
+      } catch (e) {
+        debugPrint('CHOOSE_SKILL failed: $e');
+      }
       await _loadCanonicalState();
     }
   }
@@ -1757,22 +1759,24 @@ Input: "the cabinet I need what is inside" → {"route": "ROLL_REQUIRED", "actio
                             const SizedBox(width: 8),
                             GestureDetector(
                               onTap: canAfford ? () async {
-                                final user = Supabase.instance.client.auth.currentUser!;
-                                final inv = List<Map<String, dynamic>>.from(
-                                  ((_canonicalState?['inventory'] as List?)?.map((e) => Map<String, dynamic>.from(e as Map)) ?? [])
-                                );
-                                inv.add({...item, 'quantity': 1});
-                                final newGold = gold - cost;
-                                await Supabase.instance.client
-                                    .from('canonical_state')
-                                    .update({'gold': newGold, 'inventory': inv})
-                                    .eq('user_id', user.id)
-                                    .eq('character_id', widget.characterId);
-                                await _loadCanonicalState();
-                                Navigator.pop(ctx);
-                                setState(() {
-                                  _log.add({'type': 'system', 'text': 'Purchased ${item['name']} for ${cost}g.'});
-                                });
+                                // Purchase goes through canonical_command — server validates price
+                                try {
+                                  await Supabase.instance.client.functions.invoke(
+                                    'canonical_command',
+                                    body: {
+                                      'character_id': widget.characterId,
+                                      'command': 'BUY_ITEM',
+                                      'item_id': item['id'] as String,
+                                    },
+                                  );
+                                  await _loadCanonicalState();
+                                  Navigator.pop(ctx);
+                                  setState(() {
+                                    _log.add({'type': 'system', 'text': 'Purchased ${item['name']} for ${cost}g.'});
+                                  });
+                                } catch (e) {
+                                  debugPrint('BUY_ITEM failed: $e');
+                                }
                               } : null,
                               child: Container(
                                 padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),

@@ -122,16 +122,17 @@ class _CharacterSheetPanelState extends State<CharacterSheetPanel>
                 onPressed: _storyEditBusy ? null : () async {
                   setSheet(() => _storyEditBusy = true);
                   try {
-                    final user = Supabase.instance.client.auth.currentUser!;
-                    await Supabase.instance.client
-                        .from('canonical_state')
-                        .update({
-                          'character_name': _nameEditController.text.trim(),
-                          'origin': _originEditController.text.trim(),
-                          'backstory': _backstoryEditController.text.trim(),
-                        })
-                        .eq('user_id', user.id)
-                        .eq('character_id', widget.canonicalState['character_id'] as String);
+                    // Profile edits go through canonical_command — server enforces limits
+                    await Supabase.instance.client.functions.invoke(
+                      'canonical_command',
+                      body: {
+                        'character_id': widget.canonicalState['character_id'] as String,
+                        'command': 'EDIT_PROFILE',
+                        'character_name': _nameEditController.text.trim(),
+                        'origin': _originEditController.text.trim(),
+                        'backstory': _backstoryEditController.text.trim(),
+                      },
+                    );
                     widget.onSettingChanged?.call();
                     if (ctx.mounted) Navigator.pop(ctx);
                   } catch (e) {

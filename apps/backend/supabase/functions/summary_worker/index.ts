@@ -6,9 +6,10 @@ interface SummaryRequest {
   character_id: string;
   revision_id: string;
   trigger_type: "hard" | "soft";
-  events: string[];
-  narration_context: string;
   ollama_url?: string;
+  // events and narration_context are intentionally absent from the client payload.
+  // summary_worker loads the revision from DB and derives both server-side,
+  // preventing fabricated event lists or injected context strings.
 }
 
 export function buildFallbackSummary(
@@ -68,7 +69,7 @@ if (import.meta.main) serve(async (req: Request) => {
     const user_id = user.id;
 
     const body: SummaryRequest = await req.json();
-    const { character_id, revision_id, trigger_type, events, narration_context, ollama_url } = body;
+    const { character_id, revision_id, trigger_type, ollama_url } = body;
 
     if (!character_id || !revision_id) {
       return jsonResponse({ error: "Missing required fields: character_id, revision_id" }, 400);
@@ -79,7 +80,26 @@ if (import.meta.main) serve(async (req: Request) => {
       Deno.env.get("SVC_ROLE_KEY")!,
     );
 
-    // ── Load canonical state for context ─────────────────────────
+    // ── Load and authenticate the revision ────────────────────────
+    // Reject if revision_id does not belong to this user + character pair.
+    // This prevents the client from submitting a revision_id from another character
+    // and prevents fabricated event lists / injected narration context.
+    const { data: revision, error: revError } = await supabase
+      .from("revisions")
+      .select("id, player_action, success_tier, route_category, events")
+      .eq("id", revision_id)
+      .eq("user_id", user_id)
+      .eq("character_id", character_id)
+      .single();
+
+    if (revError || !revision) {
+      return jsonResponse({ error: "Revision not found or access denied" }, 404);
+    }
+
+    // ── Events are authoritative from the stored revision ─────────
+    const events = (revision.events as string[]) ?? [];
+
+    // ── Load canonical state for character context ─────────────────
     const { data: state } = await supabase
       .from("canonical_state")
       .select("character_name, character_class, current_location, campaign_id, xp, level")
@@ -87,10 +107,17 @@ if (import.meta.main) serve(async (req: Request) => {
       .eq("character_id", character_id)
       .single();
 
-    // ── Build summary prompt ──────────────────────────────────────
+    // ── Build summary prompt from stored revision data ────────────
     const keyEvents = events
       .filter((e) => !e.startsWith("COMBAT_TURN_RESOLVED"))
       .join(", ");
+
+    // Narration context derived from stored DB fields — not from client submission
+    const serverContext = [
+      `Action: ${revision.player_action}`,
+      `Outcome: ${revision.success_tier}`,
+      keyEvents ? `Events: ${keyEvents}` : "",
+    ].filter(Boolean).join("\n");
 
     const prompt = `You are a dark fantasy chronicle writer. Write a 2-3 sentence summary of what just happened in this RPG session turn. Be specific about what changed. No preamble.
 
@@ -99,8 +126,8 @@ Location: ${state?.current_location}
 Key events this turn: ${keyEvents || "exploration"}
 Trigger: ${trigger_type} summary
 
-Narration context:
-${narration_context.slice(0, 800)}
+Context:
+${serverContext.slice(0, 800)}
 
 Write only the summary, 2-3 sentences maximum.`;
 

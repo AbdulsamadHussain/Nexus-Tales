@@ -4,10 +4,22 @@ import '../game/game_screen.dart';
 
 class CharacterSetupScreen extends StatefulWidget {
   /// If non-null, the character will be placed into this custom campaign
-  /// instead of the default campaign_01.
+  /// (authoring flow — a new campaign row is created from this data).
   final Map<String, dynamic>? customCampaign;
 
-  const CharacterSetupScreen({super.key, this.customCampaign});
+  /// If non-null, the character joins an *existing* campaign by id
+  /// (Browse Worlds flow — no new campaign row is created).
+  final String? existingCampaignId;
+
+  /// Display-only info for the campaign banner when using existingCampaignId.
+  final Map<String, dynamic>? existingCampaignDisplay;
+
+  const CharacterSetupScreen({
+    super.key,
+    this.customCampaign,
+    this.existingCampaignId,
+    this.existingCampaignDisplay,
+  });
 
   @override
   State<CharacterSetupScreen> createState() => _CharacterSetupScreenState();
@@ -59,6 +71,7 @@ class _CharacterSetupScreenState extends State<CharacterSetupScreen> {
   final _classes = ['Rogue', 'War Mage', 'Warden', 'Plague Doctor', 'Hex Blade'];
 
   bool get _isCustomCampaign => widget.customCampaign != null;
+  bool get _isExistingCampaign => widget.existingCampaignId != null;
 
   @override
   void dispose() {
@@ -104,8 +117,12 @@ class _CharacterSetupScreenState extends State<CharacterSetupScreen> {
         };
       }
 
-      // Attach custom campaign payload if coming from CreateCampaignScreen
-      if (_isCustomCampaign) {
+      // Attach campaign: either join an existing one or author a new one
+      if (_isExistingCampaign) {
+        // Browse Worlds flow — create_character verifies access server-side
+        characterData['existing_campaign_id'] = widget.existingCampaignId;
+      } else if (_isCustomCampaign) {
+        // Custom authoring flow — create_character creates a new campaign row
         characterData['custom_campaign'] = widget.customCampaign;
       }
 
@@ -156,7 +173,7 @@ class _CharacterSetupScreenState extends State<CharacterSetupScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            if (_isCustomCampaign) ...[
+            if (_isCustomCampaign || _isExistingCampaign) ...[
               Container(
                 padding: const EdgeInsets.all(12),
                 margin: const EdgeInsets.only(bottom: 20),
@@ -169,7 +186,9 @@ class _CharacterSetupScreenState extends State<CharacterSetupScreen> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      widget.customCampaign!['title'] as String,
+                      _isExistingCampaign
+                          ? (widget.existingCampaignDisplay?['title'] as String? ?? 'Public World')
+                          : widget.customCampaign!['title'] as String,
                       style: const TextStyle(
                         color: Color(0xFFC9A84C),
                         fontSize: 14,
@@ -178,7 +197,9 @@ class _CharacterSetupScreenState extends State<CharacterSetupScreen> {
                     ),
                     const SizedBox(height: 4),
                     Text(
-                      'Custom world · ${_toneLabel(widget.customCampaign!['narrator_tone'] as String)}',
+                      _isExistingCampaign
+                          ? 'Public world · ${_toneLabel(widget.existingCampaignDisplay?['narrator_tone'] as String? ?? 'grimdark')}'
+                          : 'Custom world · ${_toneLabel(widget.customCampaign!['narrator_tone'] as String)}',
                       style: const TextStyle(color: Color(0xFF4A9EFF), fontSize: 11, letterSpacing: 0.5),
                     ),
                   ],

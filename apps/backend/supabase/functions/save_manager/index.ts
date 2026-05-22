@@ -31,7 +31,7 @@ export const SCHEMA_DESCRIPTORS: Record<number, Record<string, string>> = {
 interface SaveRequest {
   action: "SAVE" | "LOAD" | "LIST" | "DELETE" | "EXPORT";
   // user_id intentionally omitted — always derived from the verified JWT
-  character_id?: string;
+  character_id: string;   // required for all multi-character operations
   save_name?: string;
   save_id?: string;
 }
@@ -74,8 +74,8 @@ if (import.meta.main) serve(async (req: Request) => {
     const body: SaveRequest = await req.json();
     const { action, character_id } = body;
 
-    if (!action) {
-      return jsonResponse({ error: "Missing required fields" }, 400);
+    if (!action || !character_id) {
+      return jsonResponse({ error: "action and character_id are required" }, 400);
     }
 
     const supabase = createClient(
@@ -87,13 +87,13 @@ if (import.meta.main) serve(async (req: Request) => {
     if (action === "SAVE") {
       const save_name = body.save_name ?? `Save ${new Date().toLocaleString()}`;
 
-      // Load current canonical state
-      const stateQuery = supabase
+      // Load current canonical state — scoped to both user_id and character_id
+      const { data: state, error: stateError } = await supabase
         .from("canonical_state")
         .select("*")
-        .eq("user_id", user_id);
-      if (character_id) stateQuery.eq("character_id", character_id);
-      const { data: state, error: stateError } = await stateQuery.single();
+        .eq("user_id", user_id)
+        .eq("character_id", character_id)
+        .single();
 
       if (stateError || !state) {
         return jsonResponse({ error: "Canonical state not found" }, 404);
@@ -107,11 +107,12 @@ if (import.meta.main) serve(async (req: Request) => {
         .eq("campaign_id", state.campaign_id)
         .maybeSingle();
 
-      // Get latest revision id
+      // Get latest revision — scoped to this character to avoid cross-character bleed
       const { data: latestRevision } = await supabase
         .from("revisions")
         .select("id")
         .eq("user_id", user_id)
+        .eq("character_id", character_id)
         .order("created_at", { ascending: false })
         .limit(1)
         .maybeSingle();
@@ -120,7 +121,7 @@ if (import.meta.main) serve(async (req: Request) => {
         .from("manual_saves")
         .insert({
           user_id,
-          character_id: character_id ?? null,
+          character_id,
           revision_id: latestRevision?.id ?? "none",
           save_name,
           campaign_id: state.campaign_id,
@@ -145,14 +146,13 @@ if (import.meta.main) serve(async (req: Request) => {
 
     // ── LIST ─────────────────────────────────────────────────────
     if (action === "LIST") {
-      const listQuery = supabase
+      const { data: saves, error } = await supabase
         .from("manual_saves")
         .select("id, save_name, campaign_id, created_at, revision_id")
         .eq("user_id", user_id)
+        .eq("character_id", character_id)
         .order("created_at", { ascending: false })
         .limit(20);
-      if (character_id) listQuery.eq("character_id", character_id);
-      const { data: saves, error } = await listQuery;
 
       if (error) throw error;
 
@@ -165,11 +165,13 @@ if (import.meta.main) serve(async (req: Request) => {
         return jsonResponse({ error: "save_id required for LOAD" }, 400);
       }
 
+      // character_id guard: verify the save belongs to this user AND this character
       const { data: save, error: saveError } = await supabase
         .from("manual_saves")
         .select("*")
         .eq("id", body.save_id)
         .eq("user_id", user_id)
+        .eq("character_id", character_id)
         .single();
 
       if (saveError || !save) {
@@ -180,9 +182,8 @@ if (import.meta.main) serve(async (req: Request) => {
       const canonicalState = snapshot.canonical_state as Record<string, unknown>;
       const campaignState = snapshot.campaign_state as Record<string, unknown>;
 
-      // Restore canonical state
-      const restoreCharacterId = (canonicalState.character_id as string | undefined) ?? character_id;
-      const restoreQuery = supabase
+      // Restore canonical state — always scoped to the requesting character_id
+      const { error: restoreError } = await supabase
         .from("canonical_state")
         .update({
           hp: canonicalState.hp,
@@ -203,14 +204,13 @@ if (import.meta.main) serve(async (req: Request) => {
           skills: canonicalState.skills,
           updated_at: new Date().toISOString(),
         })
-        .eq("user_id", user_id);
-      if (restoreCharacterId) restoreQuery.eq("character_id", restoreCharacterId);
-      const { error: restoreError } = await restoreQuery;
+        .eq("user_id", user_id)
+        .eq("character_id", character_id);
 
       if (restoreError) throw restoreError;
 
       // Restore campaign state
-      if (campaignState && campaignState.campaign_id && restoreCharacterId) {
+      if (campaignState && campaignState.campaign_id) {
         await supabase
           .from("player_campaign_state")
           .update({
@@ -219,7 +219,7 @@ if (import.meta.main) serve(async (req: Request) => {
             beaten_beats: campaignState.beaten_beats,
             scene_item_states: campaignState.scene_item_states,
           })
-          .eq("character_id", restoreCharacterId)
+          .eq("character_id", character_id)
           .eq("campaign_id", campaignState.campaign_id);
       }
 
@@ -236,13 +236,12 @@ if (import.meta.main) serve(async (req: Request) => {
         return jsonResponse({ error: "save_id required for DELETE" }, 400);
       }
 
-      const deleteQuery = supabase
+      const { error } = await supabase
         .from("manual_saves")
         .delete()
         .eq("id", body.save_id)
-        .eq("user_id", user_id);
-      if (character_id) deleteQuery.eq("character_id", character_id);
-      const { error } = await deleteQuery;
+        .eq("user_id", user_id)
+        .eq("character_id", character_id);
 
       if (error) throw error;
 
@@ -250,18 +249,20 @@ if (import.meta.main) serve(async (req: Request) => {
     }
 
     // ── EXPORT ───────────────────────────────────────────────────
-    // §16.10 / Appendix C -human-readable debug bundle for support
+    // §16.10 / Appendix C — human-readable debug bundle for support
     // and migration failure triage. Never overwrites the original save.
     if (action === "EXPORT") {
       if (!body.save_id) {
         return jsonResponse({ error: "save_id required for EXPORT" }, 400);
       }
 
+      // character_id guard: verify the save belongs to this user AND this character
       const { data: save, error: saveError } = await supabase
         .from("manual_saves")
         .select("*")
         .eq("id", body.save_id)
         .eq("user_id", user_id)
+        .eq("character_id", character_id)
         .single();
 
       if (saveError || !save) {

@@ -123,17 +123,16 @@ class _BrowseCampaignsScreenState extends State<BrowseCampaignsScreen> {
 
     return GestureDetector(
       onTap: () {
+        // Pass the existing campaign id — create_character will join it server-side
+        // without duplicating campaign rows or scenes.
         Navigator.push(
           context,
           MaterialPageRoute(
             builder: (_) => CharacterSetupScreen(
-              customCampaign: {
-                'title': c['title'],
-                'world_description': c['world_description'] ?? c['description'] ?? '',
+              existingCampaignId: c['id'] as String,
+              existingCampaignDisplay: {
+                'title': c['title'] as String? ?? 'Unknown World',
                 'narrator_tone': tone,
-                'starting_scene_title': 'The Beginning',
-                'starting_scene_description': c['description'] ?? '',
-                'starting_scene_atmosphere': '',
               },
             ),
           ),

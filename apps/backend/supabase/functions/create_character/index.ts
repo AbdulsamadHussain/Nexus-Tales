@@ -44,12 +44,55 @@ serve(async (req: Request) => {
     const body = await req.json();
 
     // ── Resolve campaign ──────────────────────────────────────────
-    // If the caller passes a `custom_campaign` object, create a new campaign row.
-    // Otherwise fall back to the curated campaign_01.
+    // Priority order:
+    //   1. existing_campaign_id — join an existing campaign (Browse Worlds flow)
+    //   2. custom_campaign      — author and create a new campaign
+    //   3. fallback             — default campaign_01
     let campaignId = "campaign_01";
     let startLocation = "vault_of_the_plague_warden";
 
-    if (body.custom_campaign) {
+    if (body.existing_campaign_id) {
+      // ── Join an existing campaign (Browse Worlds) ─────────────
+      const existingId = body.existing_campaign_id as string;
+
+      const { data: campaign, error: campError } = await serviceClient
+        .from("campaigns")
+        .select("id, user_id, is_custom, is_public")
+        .eq("id", existingId)
+        .single();
+
+      if (campError || !campaign) {
+        return new Response(JSON.stringify({ error: "Campaign not found" }), {
+          status: 404,
+          headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" },
+        });
+      }
+
+      // Access check: system-owned (user_id null), owned by this user, or public custom
+      const accessible =
+        campaign.user_id === null ||
+        campaign.user_id === user.id ||
+        (campaign.is_custom === true && campaign.is_public === true);
+
+      if (!accessible) {
+        return new Response(JSON.stringify({ error: "Campaign not accessible" }), {
+          status: 403,
+          headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" },
+        });
+      }
+
+      // Load the start scene for this campaign
+      const { data: startScene } = await serviceClient
+        .from("scenes")
+        .select("id")
+        .eq("campaign_id", existingId)
+        .eq("is_start_scene", true)
+        .maybeSingle();
+
+      campaignId = existingId;
+      startLocation = startScene?.id ?? `scene_${campaignId}_start`;
+
+    } else if (body.custom_campaign) {
       const cc = body.custom_campaign as {
         title: string;
         world_description: string;
