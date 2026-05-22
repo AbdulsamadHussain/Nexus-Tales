@@ -157,7 +157,7 @@ class _GameScreenState extends ConsumerState<GameScreen> {
       final user = Supabase.instance.client.auth.currentUser!;
       final revisions = await Supabase.instance.client
           .from('revisions')
-          .select('revision_id, player_action, success_tier, route_category, created_at')
+          .select('id, player_action, success_tier, route_category, created_at')
           .eq('user_id', user.id)
           .eq('character_id', widget.characterId)
           .order('created_at', ascending: false)
@@ -172,7 +172,7 @@ class _GameScreenState extends ConsumerState<GameScreen> {
         }
         history.add({
           'type': 'system',
-          'text': '${rev['revision_id']} · ${rev['success_tier']} · ${rev['route_category']}',
+          'text': '${rev['id']} · ${rev['success_tier']} · ${rev['route_category']}',
         });
       }
       if (mounted && history.isNotEmpty) {
@@ -275,8 +275,6 @@ class _GameScreenState extends ConsumerState<GameScreen> {
       return;
     }
 
-    final user = Supabase.instance.client.auth.currentUser!;
-
     setState(() {
       _busy = true;
       _log.add({'type': 'player', 'text': action});
@@ -287,7 +285,6 @@ class _GameScreenState extends ConsumerState<GameScreen> {
       final response = await Supabase.instance.client.functions.invoke(
         'turn_orchestrator',
         body: {
-          'user_id': user.id,
           'character_id': widget.characterId,
           'player_action': action,
           'previous_revision_id': _lastRevisionId,
@@ -333,7 +330,7 @@ class _GameScreenState extends ConsumerState<GameScreen> {
         final parsed = await _runParserAssist(action);
         if (parsed != null) {
           // Parser resolved to a real route — resubmit with it
-          await _submitWithRoute(action, parsed['route']!, parsed['action_type']!, parsed['candidate_skill'], user.id);
+          await _submitWithRoute(action, parsed['route']!, parsed['action_type']!, parsed['candidate_skill']);
         } else {
           // Parser couldn't resolve — show clarification bubble
           setState(() {
@@ -1370,13 +1367,11 @@ Input: "the cabinet I need what is inside" → {"route": "ROLL_REQUIRED", "actio
     String resolvedRoute,
     String resolvedActionType,
     String? candidateSkill,
-    String userId,
   ) async {
     try {
       final response = await Supabase.instance.client.functions.invoke(
         'turn_orchestrator',
         body: {
-          'user_id': userId,
           'character_id': widget.characterId,
           'player_action': action,
           'previous_revision_id': _lastRevisionId,
@@ -1506,11 +1501,9 @@ Input: "the cabinet I need what is inside" → {"route": "ROLL_REQUIRED", "actio
     if (data['summary_job_queued'] != true) return;
 
     try {
-      final user = Supabase.instance.client.auth.currentUser!;
       await Supabase.instance.client.functions.invoke(
         'summary_worker',
         body: {
-          'user_id': user.id,
           'character_id': widget.characterId,
           'revision_id': data['revision_id'],
           'trigger_type': 'hard',
@@ -1529,13 +1522,11 @@ Input: "the cabinet I need what is inside" → {"route": "ROLL_REQUIRED", "actio
 
   Future<void> _triggerAutosave() async {
     try {
-      final user = Supabase.instance.client.auth.currentUser!;
       final now = DateTime.now();
       await Supabase.instance.client.functions.invoke(
         'save_manager',
         body: {
           'action': 'SAVE',
-          'user_id': user.id,
           'character_id': widget.characterId,
           'save_name':
               'Autosave ${now.day}/${now.month} ${now.hour}:${now.minute.toString().padLeft(2, '0')}',

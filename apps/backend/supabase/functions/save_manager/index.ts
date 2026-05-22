@@ -30,7 +30,7 @@ export const SCHEMA_DESCRIPTORS: Record<number, Record<string, string>> = {
 
 interface SaveRequest {
   action: "SAVE" | "LOAD" | "LIST" | "DELETE" | "EXPORT";
-  user_id: string;
+  // user_id intentionally omitted — always derived from the verified JWT
   character_id?: string;
   save_name?: string;
   save_id?: string;
@@ -58,10 +58,23 @@ if (import.meta.main) serve(async (req: Request) => {
   }
 
   try {
-    const body: SaveRequest = await req.json();
-    const { action, user_id, character_id } = body;
+    // ── Identity: always derive user_id from the verified JWT ─────
+    const authHeader = req.headers.get("Authorization");
+    if (!authHeader) return jsonResponse({ error: "No auth header" }, 401);
 
-    if (!user_id || !action) {
+    const userClient = createClient(
+      Deno.env.get("SUPABASE_URL")!,
+      Deno.env.get("SUPABASE_ANON_KEY")!,
+      { global: { headers: { Authorization: authHeader } } },
+    );
+    const { data: { user }, error: userError } = await userClient.auth.getUser();
+    if (userError || !user) return jsonResponse({ error: "Invalid token" }, 401);
+    const user_id = user.id;
+
+    const body: SaveRequest = await req.json();
+    const { action, character_id } = body;
+
+    if (!action) {
       return jsonResponse({ error: "Missing required fields" }, 400);
     }
 

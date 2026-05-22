@@ -909,6 +909,17 @@ if (import.meta.main) serve(async (req: Request) => {
     });
   }
 
+  // ── Internal-only: only turn_orchestrator may call this ──────────
+  // Clients hold the anon key; only server-side functions hold SVC_ROLE_KEY.
+  const authHeader = req.headers.get("Authorization") ?? "";
+  const serviceKey = Deno.env.get("SVC_ROLE_KEY") ?? "";
+  if (!serviceKey || authHeader !== `Bearer ${serviceKey}`) {
+    return new Response(JSON.stringify({ error: "Internal endpoint only" }), {
+      status: 403,
+      headers: { "Content-Type": "application/json" },
+    });
+  }
+
   try {
     const packet: ActionPacket = await req.json();
     const {
@@ -1238,15 +1249,20 @@ if (import.meta.main) serve(async (req: Request) => {
     }
 
     // ── 6e. Proactive aggression from deeply hostile NPCs ─────────
+    // IMPORTANT: apply directly to updatedState.hp — delta.hp was already
+    // used to compute updatedState above so mutating delta here has no effect.
     {
       const relationships = (state.relationships as Record<string, unknown>) ?? {};
       for (const npc of npcsInScene) {
-        if (npc.is_hostile && !npcStateUpdates[npc.id as string]?.is_dead) {
+        if (npc.is_hostile && !(npcStateUpdates[npc.id as string] as Record<string, unknown> | undefined)?.is_dead) {
           const score = getNpcRelationshipScore(npc.id as string, relationships);
           if (score < -75) {
-            const dmg = getNpcCounterDamage(npc);
-            if (delta.hp === undefined) delta.hp = 0;
-            delta.hp -= Math.floor(dmg * 0.5); // half damage even on non-attack turns
+            const aggrDmg = Math.floor(getNpcCounterDamage(npc) * 0.5);
+            // Apply to the state that will actually be written to DB
+            const baseHp = updatedState.hp ?? state.hp;
+            updatedState.hp = Math.max(0, baseHp - aggrDmg);
+            // Keep delta in sync so narration context reflects the true damage
+            delta.hp = (delta.hp ?? 0) - aggrDmg;
             events.push(`HOSTILE_AGGRESSION:${npc.name ?? npc.id}`);
             break; // one aggression per turn max
           }

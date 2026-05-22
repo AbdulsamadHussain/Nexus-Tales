@@ -16,7 +16,7 @@ type GatewayDecision =
   | "REJECT";
 
 interface TurnRequest {
-  user_id: string;
+  // user_id intentionally omitted — always derived from the verified JWT
   character_id?: string;
   player_action: string;
   previous_revision_id: string | null;
@@ -254,11 +254,23 @@ if (import.meta.main) serve(async (req: Request) => {
   }
 
   try {
-    const body: TurnRequest = await req.json();
-    const { user_id, character_id, player_action, previous_revision_id, content_settings } =
-      body;
+    // ── Identity: always derive user_id from the verified JWT ─────
+    const authHeader = req.headers.get("Authorization");
+    if (!authHeader) return jsonResponse({ error: "No auth header" }, 401);
 
-    if (!user_id || !player_action || !content_settings || !character_id) {
+    const userClient = createClient(
+      Deno.env.get("SUPABASE_URL")!,
+      Deno.env.get("SUPABASE_ANON_KEY")!,
+      { global: { headers: { Authorization: authHeader } } },
+    );
+    const { data: { user }, error: userError } = await userClient.auth.getUser();
+    if (userError || !user) return jsonResponse({ error: "Invalid token" }, 401);
+    const user_id = user.id;
+
+    const body: TurnRequest = await req.json();
+    const { character_id, player_action, previous_revision_id, content_settings } = body;
+
+    if (!player_action || !content_settings || !character_id) {
       return jsonResponse({ error: "Missing required fields." }, 400);
     }
 

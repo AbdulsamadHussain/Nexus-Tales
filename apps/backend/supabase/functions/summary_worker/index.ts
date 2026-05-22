@@ -2,7 +2,7 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 interface SummaryRequest {
-  user_id: string;
+  // user_id intentionally omitted — always derived from the verified JWT
   character_id: string;
   revision_id: string;
   trigger_type: "hard" | "soft";
@@ -54,11 +54,24 @@ if (import.meta.main) serve(async (req: Request) => {
   }
 
   try {
-    const body: SummaryRequest = await req.json();
-    const { user_id, character_id, revision_id, trigger_type, events, narration_context, ollama_url } = body;
+    // ── Identity: always derive user_id from the verified JWT ─────
+    const authHeader = req.headers.get("Authorization");
+    if (!authHeader) return jsonResponse({ error: "No auth header" }, 401);
 
-    if (!user_id || !character_id || !revision_id) {
-      return jsonResponse({ error: "Missing required fields: user_id, character_id, revision_id" }, 400);
+    const userClient = createClient(
+      Deno.env.get("SUPABASE_URL")!,
+      Deno.env.get("SUPABASE_ANON_KEY")!,
+      { global: { headers: { Authorization: authHeader } } },
+    );
+    const { data: { user }, error: userError } = await userClient.auth.getUser();
+    if (userError || !user) return jsonResponse({ error: "Invalid token" }, 401);
+    const user_id = user.id;
+
+    const body: SummaryRequest = await req.json();
+    const { character_id, revision_id, trigger_type, events, narration_context, ollama_url } = body;
+
+    if (!character_id || !revision_id) {
+      return jsonResponse({ error: "Missing required fields: character_id, revision_id" }, 400);
     }
 
     const supabase = createClient(

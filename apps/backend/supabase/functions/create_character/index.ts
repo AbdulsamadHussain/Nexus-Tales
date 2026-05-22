@@ -66,7 +66,8 @@ serve(async (req: Request) => {
         .replace(/[^a-z0-9]+/g, "_")
         .replace(/^_|_$/g, "")
         .slice(0, 40);
-      campaignId = `custom_${user.id.slice(0, 8)}_${slug}`;
+      const uniqueSuffix = Date.now().toString(36).slice(-4);
+      campaignId = `custom_${user.id.slice(0, 8)}_${slug}_${uniqueSuffix}`;
       startLocation = `scene_${campaignId}_start`;
 
       // Insert campaign

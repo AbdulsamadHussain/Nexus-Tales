@@ -32,10 +32,9 @@ class _SavesPanelState extends State<SavesPanel> {
 
   Future<void> _loadSaves() async {
     try {
-      final user = Supabase.instance.client.auth.currentUser!;
       final response = await Supabase.instance.client.functions.invoke(
         'save_manager',
-        body: {'action': 'LIST', 'user_id': user.id, 'character_id': widget.characterId},
+        body: {'action': 'LIST', 'character_id': widget.characterId},
       );
       final data = response.data as Map<String, dynamic>;
       setState(() {
@@ -55,7 +54,6 @@ class _SavesPanelState extends State<SavesPanel> {
   Future<void> _createSave() async {
     setState(() => _saving = true);
     try {
-      final user = Supabase.instance.client.auth.currentUser!;
       final now = DateTime.now();
       final saveName =
           'Save ${now.day}/${now.month} ${now.hour}:${now.minute.toString().padLeft(2, '0')}';
@@ -64,7 +62,6 @@ class _SavesPanelState extends State<SavesPanel> {
         'save_manager',
         body: {
           'action': 'SAVE',
-          'user_id': user.id,
           'character_id': widget.characterId,
           'save_name': saveName,
         },
@@ -109,12 +106,10 @@ class _SavesPanelState extends State<SavesPanel> {
 
     setState(() => _loading = true);
     try {
-      final user = Supabase.instance.client.auth.currentUser!;
       await Supabase.instance.client.functions.invoke(
         'save_manager',
         body: {
           'action': 'LOAD',
-          'user_id': user.id,
           'character_id': widget.characterId,
           'save_id': saveId,
         },
@@ -159,12 +154,10 @@ class _SavesPanelState extends State<SavesPanel> {
     if (confirmed != true) return;
 
     try {
-      final user = Supabase.instance.client.auth.currentUser!;
       await Supabase.instance.client.functions.invoke(
         'save_manager',
         body: {
           'action': 'DELETE',
-          'user_id': user.id,
           'character_id': widget.characterId,
           'save_id': saveId,
         },
@@ -177,12 +170,10 @@ class _SavesPanelState extends State<SavesPanel> {
 
   Future<void> _exportSave(String saveId, String saveName) async {
     try {
-      final user = Supabase.instance.client.auth.currentUser!;
       final response = await Supabase.instance.client.functions.invoke(
         'save_manager',
         body: {
           'action': 'EXPORT',
-          'user_id': user.id,
           'character_id': widget.characterId,
           'save_id': saveId,
         },
