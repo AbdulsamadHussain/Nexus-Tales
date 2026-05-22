@@ -1,22 +1,25 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
-// ── Server-authoritative item catalogue ───────────────────────────
+// ── Server-authoritative item catalogue ───────────────────────────────────
 // Prices and attributes are defined here — never trusted from the client.
+// The Edge Function looks up the item and passes the authoritative cost + record
+// to the DB RPC, which re-validates the gold balance against the locked row.
 export const ITEM_CATALOGUE: Record<string, {
   id: string; name: string; desc: string; cost: number;
   item_type: string; rarity: string;
 }> = {
-  item_healing_salve:   { id: "item_healing_salve",   name: "Healing Salve",   desc: "Restores 12 HP when used.",                    cost: 15, item_type: "consumable", rarity: "common" },
-  item_mana_tonic:      { id: "item_mana_tonic",      name: "Mana Tonic",      desc: "Restores 10 MP when used.",                    cost: 18, item_type: "consumable", rarity: "common" },
-  item_stamina_draught: { id: "item_stamina_draught",  name: "Stamina Draught", desc: "Restores 8 stamina when used.",               cost: 12, item_type: "consumable", rarity: "common" },
-  item_iron_ration:     { id: "item_iron_ration",     name: "Iron Ration",     desc: "Trail food. Restores 5 HP.",                   cost: 5,  item_type: "consumable", rarity: "common" },
-  item_smoke_bomb:      { id: "item_smoke_bomb",      name: "Smoke Bomb",      desc: "Escape any combat without a counter-attack.",  cost: 25, item_type: "consumable", rarity: "rare" },
+  item_healing_salve:   { id: "item_healing_salve",   name: "Healing Salve",   desc: "Restores 12 HP when used.",                    cost: 15, item_type: "consumable", rarity: "common"    },
+  item_mana_tonic:      { id: "item_mana_tonic",      name: "Mana Tonic",      desc: "Restores 10 MP when used.",                    cost: 18, item_type: "consumable", rarity: "common"    },
+  item_stamina_draught: { id: "item_stamina_draught",  name: "Stamina Draught", desc: "Restores 8 stamina when used.",               cost: 12, item_type: "consumable", rarity: "common"    },
+  item_iron_ration:     { id: "item_iron_ration",     name: "Iron Ration",     desc: "Trail food. Restores 5 HP.",                   cost: 5,  item_type: "consumable", rarity: "common"    },
+  item_smoke_bomb:      { id: "item_smoke_bomb",      name: "Smoke Bomb",      desc: "Escape any combat without a counter-attack.",  cost: 25, item_type: "consumable", rarity: "rare"      },
   item_revive_charm:    { id: "item_revive_charm",    name: "Revive Charm",    desc: "Automatically revive at 10 HP when you fall.", cost: 60, item_type: "consumable", rarity: "legendary" },
 };
 
-// ── Server-authoritative skill catalogue ─────────────────────────
-// Skill availability is validated server-side — the client only sends a skill_id.
+// ── Server-authoritative skill catalogue ──────────────────────────────────
+// Class membership is validated here; slot availability is validated inside the
+// atomic RPC against the locked canonical_state row (race-safe).
 export const CLASS_SKILLS: Record<string, Record<string, { name: string; desc: string }>> = {
   Rogue: {
     shadow_step:  { name: "Shadow Step",  desc: "+2 to stealth and evasion rolls." },
@@ -55,15 +58,31 @@ export const CLASS_SKILLS: Record<string, Record<string, { name: string; desc: s
   },
 };
 
+// ── Exported pure helpers (used by unit tests) ────────────────────────────
+
+/** Build and validate profile update patch. Returns an empty object when nothing changed. */
+export function buildProfilePatch(body: {
+  character_name?: string;
+  origin?: string;
+  backstory?: string;
+}): Record<string, string> {
+  const updates: Record<string, string> = {};
+  const name = ((body.character_name ?? "") as string).trim();
+  const origin = ((body.origin ?? "") as string).trim();
+  const backstory = ((body.backstory ?? "") as string).trim();
+
+  if (name) updates.character_name = name.slice(0, 80);
+  // origin and backstory: include even when empty (intentional clearing).
+  if (body.origin !== undefined) updates.origin = origin.slice(0, 200);
+  if (body.backstory !== undefined) updates.backstory = backstory.slice(0, 2000);
+  return updates;
+}
+
 interface CommandRequest {
-  // user_id intentionally omitted — always derived from the verified JWT
   character_id: string;
   command: "BUY_ITEM" | "CHOOSE_SKILL" | "EDIT_PROFILE";
-  // BUY_ITEM
   item_id?: string;
-  // CHOOSE_SKILL
   skill_id?: string;
-  // EDIT_PROFILE
   character_name?: string;
   origin?: string;
   backstory?: string;
@@ -72,16 +91,8 @@ interface CommandRequest {
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
     status,
-    headers: {
-      "Content-Type": "application/json",
-      "Access-Control-Allow-Origin": "*",
-    },
+    headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" },
   });
-}
-
-function generateRevisionId(): string {
-  const num = Math.floor(Math.random() * 900000) + 100000;
-  return `cmd_${num}`;
 }
 
 if (import.meta.main) serve(async (req: Request) => {
@@ -96,7 +107,7 @@ if (import.meta.main) serve(async (req: Request) => {
   }
 
   try {
-    // ── Identity: derive user_id from the verified JWT ────────────
+    // ── Identity: derive user_id from the verified JWT ────────────────────
     const authHeader = req.headers.get("Authorization");
     if (!authHeader) return jsonResponse({ error: "No auth header" }, 401);
 
@@ -115,49 +126,21 @@ if (import.meta.main) serve(async (req: Request) => {
     if (!character_id || !command) {
       return jsonResponse({ error: "character_id and command are required" }, 400);
     }
-
-    const validCommands = ["BUY_ITEM", "CHOOSE_SKILL", "EDIT_PROFILE"];
-    if (!validCommands.includes(command)) {
+    if (!["BUY_ITEM", "CHOOSE_SKILL", "EDIT_PROFILE"].includes(command)) {
       return jsonResponse({ error: "Unknown command" }, 400);
     }
 
-    // Service-role client for all DB operations after JWT validation
+    // Service-role client: used for the atomic RPC and, in CHOOSE_SKILL, a
+    // minimal pre-read to get character_class for server-side catalogue validation.
     const supabase = createClient(
       Deno.env.get("SUPABASE_URL")!,
       Deno.env.get("SVC_ROLE_KEY")!,
     );
 
-    // ── Ownership gate: verify character belongs to this user ─────
-    const { data: state, error: stateError } = await supabase
-      .from("canonical_state")
-      .select("*")
-      .eq("user_id", user_id)
-      .eq("character_id", character_id)
-      .single();
+    // ── Resolve command-specific params ───────────────────────────────────
+    // Catalogue validation happens here (Edge Function, server-side).
+    // Slot / balance checks happen inside the atomic RPC (DB, locked row).
 
-    if (stateError || !state) {
-      return jsonResponse({ error: "Character not found" }, 404);
-    }
-
-    // ── Get latest revision for chain linkage ─────────────────────
-    const { data: latestRev } = await supabase
-      .from("revisions")
-      .select("id")
-      .eq("user_id", user_id)
-      .eq("character_id", character_id)
-      .order("created_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
-
-    const revision_id = generateRevisionId();
-    const events: string[] = [];
-    const stateDelta: Record<string, unknown> = {};
-    // postCommandPatch accumulates the fields written to canonical_state.
-    // Merged with pre-command state before the revision snapshot so the revision
-    // captures what actually exists in the DB after this command completes.
-    const postCommandPatch: Record<string, unknown> = {};
-
-    // ── BUY_ITEM ──────────────────────────────────────────────────
     if (command === "BUY_ITEM") {
       const { item_id } = body;
       if (!item_id) return jsonResponse({ error: "item_id required for BUY_ITEM" }, 400);
@@ -165,144 +148,111 @@ if (import.meta.main) serve(async (req: Request) => {
       const catalogItem = ITEM_CATALOGUE[item_id];
       if (!catalogItem) return jsonResponse({ error: "Unknown item" }, 400);
 
-      const currentGold = (state.gold as number) ?? 0;
-      if (currentGold < catalogItem.cost) {
-        return jsonResponse({ error: "Insufficient gold" }, 422);
-      }
+      // ── Atomic RPC call ───────────────────────────────────────────────
+      // execute_canonical_command:
+      //   1. SELECT canonical_state WHERE character_id + user_id FOR UPDATE
+      //   2. Validates gold >= p_item_cost against the locked row (race-safe)
+      //   3. UPDATE canonical_state
+      //   4. INSERT revisions  (rolls back step 3 on failure)
+      //   5. INSERT canonical_events (rolls back steps 3-4 on failure)
+      const { data: result, error: rpcErr } = await supabase.rpc(
+        "execute_canonical_command",
+        {
+          p_user_id:     user_id,
+          p_character_id: character_id,
+          p_command:     "BUY_ITEM",
+          p_item_id:     item_id,
+          p_item_cost:   catalogItem.cost,
+          p_item_record: { ...catalogItem, quantity: 1 },
+        },
+      );
 
-      const newGold = currentGold - catalogItem.cost;
-      const inventory = [
-        ...(Array.isArray(state.inventory)
-          ? (state.inventory as Record<string, unknown>[])
-          : []),
-        { ...catalogItem, quantity: 1 },
-      ];
-
-      const { error: updateErr } = await supabase
-        .from("canonical_state")
-        .update({ gold: newGold, inventory })
-        .eq("user_id", user_id)
-        .eq("character_id", character_id);
-
-      if (updateErr) throw updateErr;
-
-      stateDelta.gold = -catalogItem.cost;
-      postCommandPatch.gold = newGold;
-      postCommandPatch.inventory = inventory;
-      events.push(`ITEM_PURCHASED:${item_id}`);
+      if (rpcErr) throw rpcErr;
+      const r = result as Record<string, unknown>;
+      if (r.error) return jsonResponse({ error: r.error }, (r.status as number) ?? 500);
+      return jsonResponse({
+        status: "OK",
+        revision_id: r.revision_id,
+        events: r.events,
+        state_delta: { gold: -catalogItem.cost },
+      });
     }
 
-    // ── CHOOSE_SKILL ──────────────────────────────────────────────
-    else if (command === "CHOOSE_SKILL") {
+    if (command === "CHOOSE_SKILL") {
       const { skill_id } = body;
       if (!skill_id) return jsonResponse({ error: "skill_id required for CHOOSE_SKILL" }, 400);
 
-      const charClass = (state.character_class as string) ?? "Rogue";
+      // Read character_class for class-catalogue validation.
+      // character_class never changes after creation, so a pre-lock read is safe here.
+      const { data: charInfo, error: charErr } = await supabase
+        .from("canonical_state")
+        .select("character_class")
+        .eq("user_id", user_id)
+        .eq("character_id", character_id)
+        .maybeSingle();
+
+      if (charErr || !charInfo) return jsonResponse({ error: "Character not found" }, 404);
+
+      const charClass = (charInfo.character_class as string) ?? "Rogue";
       const classSkills = CLASS_SKILLS[charClass] ?? CLASS_SKILLS["Rogue"];
       const skillDef = classSkills[skill_id];
-      if (!skillDef) {
-        return jsonResponse({ error: "Skill not available for this class" }, 422);
-      }
+      if (!skillDef) return jsonResponse({ error: "Skill not available for this class" }, 422);
 
-      const existingSkills = (state.skills as Record<string, unknown>) ?? {};
-      if (existingSkills[skill_id]) {
-        return jsonResponse({ error: "Skill already learned" }, 422);
-      }
-
-      // Level-up choice is available when skill count < (level - 1).
-      // e.g. level 2 → 1 available slot, must have 0 skills; level 3 → 2 slots, etc.
-      const skillCount = Object.keys(existingSkills).length;
-      const currentLevel = (state.level as number) ?? 1;
-      if (skillCount >= currentLevel - 1) {
-        return jsonResponse({ error: "No level-up skill choice available" }, 422);
-      }
-
-      const updatedSkills = {
-        ...existingSkills,
-        [skill_id]: {
-          name: skillDef.name,
-          desc: skillDef.desc,
-          unlocked_at_level: currentLevel,
+      // ── Atomic RPC call ───────────────────────────────────────────────
+      // Slot availability is validated inside the RPC against the locked row.
+      const { data: result, error: rpcErr } = await supabase.rpc(
+        "execute_canonical_command",
+        {
+          p_user_id:      user_id,
+          p_character_id: character_id,
+          p_command:      "CHOOSE_SKILL",
+          p_skill_id:     skill_id,
+          p_skill_name:   skillDef.name,
+          p_skill_desc:   skillDef.desc,
         },
-      };
+      );
 
-      const { error: updateErr } = await supabase
-        .from("canonical_state")
-        .update({ skills: updatedSkills })
-        .eq("user_id", user_id)
-        .eq("character_id", character_id);
-
-      if (updateErr) throw updateErr;
-
-      postCommandPatch.skills = updatedSkills;
-      events.push(`SKILL_LEARNED:${skill_id}`);
+      if (rpcErr) throw rpcErr;
+      const r = result as Record<string, unknown>;
+      if (r.error) return jsonResponse({ error: r.error }, (r.status as number) ?? 500);
+      return jsonResponse({
+        status: "OK",
+        revision_id: r.revision_id,
+        events: r.events,
+        state_delta: {},
+      });
     }
 
-    // ── EDIT_PROFILE ──────────────────────────────────────────────
-    else if (command === "EDIT_PROFILE") {
-      const updates: Record<string, string> = {};
-
-      const name = ((body.character_name ?? "") as string).trim();
-      const origin = ((body.origin ?? "") as string).trim();
-      const backstory = ((body.backstory ?? "") as string).trim();
-
-      // Only apply non-empty values; slice to sane maximums
-      if (name) updates.character_name = name.slice(0, 80);
-      // origin and backstory may be intentionally cleared → always include if provided
-      if (body.origin !== undefined) updates.origin = origin.slice(0, 200);
-      if (body.backstory !== undefined) updates.backstory = backstory.slice(0, 2000);
-
-      if (Object.keys(updates).length === 0) {
+    if (command === "EDIT_PROFILE") {
+      const profilePatch = buildProfilePatch(body);
+      if (Object.keys(profilePatch).length === 0) {
         return jsonResponse({ error: "No fields to update" }, 400);
       }
 
-      const { error: updateErr } = await supabase
-        .from("canonical_state")
-        .update(updates)
-        .eq("user_id", user_id)
-        .eq("character_id", character_id);
-
-      if (updateErr) throw updateErr;
-
-      Object.assign(postCommandPatch, updates);
-      events.push("PROFILE_EDITED");
-    }
-
-    // ── Commit revision row (UI commands create their own trail) ──
-    const { error: revErr } = await supabase
-      .from("revisions")
-      .insert({
-        id: revision_id,
-        user_id,
-        character_id,
-        previous_id: latestRev?.id ?? null,
-        schema_version: 1,
-        player_action: `[${command}]`,
-        route_category: "UI_ACTION",
-        gateway_decision: "ALLOW",
-        success_tier: "NO_ROLL",
-        state_snapshot: { ...state, ...postCommandPatch },
-        events,
-        autosave_candidate: false,
-        narration_done: true,
-        summary_job_queued: false,
-      });
-
-    if (revErr) throw revErr;
-
-    // ── Commit canonical_events ───────────────────────────────────
-    if (events.length > 0) {
-      await supabase.from("canonical_events").insert(
-        events.map((event_type) => ({
-          user_id,
-          revision_id,
-          event_type,
-          payload: { command, delta: stateDelta },
-        })),
+      // ── Atomic RPC call ───────────────────────────────────────────────
+      const { data: result, error: rpcErr } = await supabase.rpc(
+        "execute_canonical_command",
+        {
+          p_user_id:         user_id,
+          p_character_id:    character_id,
+          p_command:         "EDIT_PROFILE",
+          p_profile_updates: profilePatch,
+        },
       );
+
+      if (rpcErr) throw rpcErr;
+      const r = result as Record<string, unknown>;
+      if (r.error) return jsonResponse({ error: r.error }, (r.status as number) ?? 500);
+      return jsonResponse({
+        status: "OK",
+        revision_id: r.revision_id,
+        events: r.events,
+        state_delta: {},
+      });
     }
 
-    return jsonResponse({ status: "OK", revision_id, events, state_delta: stateDelta });
+    return jsonResponse({ error: "Unknown command" }, 400);
+
   } catch (err) {
     console.error("canonical_command error:", err);
     return jsonResponse({ error: String(err) }, 500);

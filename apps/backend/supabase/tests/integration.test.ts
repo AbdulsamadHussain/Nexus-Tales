@@ -55,7 +55,7 @@ async function invokeAs(token: string, fn: string, body: unknown): Promise<Respo
 
 /** Direct REST query using service role (for verifying DB state, not for user-facing calls). */
 async function dbSelect(table: string, filter: string): Promise<unknown[]> {
-  const res = await fetch(`${BASE}/rest/v1/${table}?${filter}&limit=10`, {
+  const res = await fetch(`${BASE}/rest/v1/${table}?${filter}&limit=100`, {
     headers: {
       "Content-Type": "application/json",
       "Authorization": `Bearer ${SVC_KEY}`,
@@ -64,6 +64,44 @@ async function dbSelect(table: string, filter: string): Promise<unknown[]> {
   });
   return await res.json() as unknown[];
 }
+
+/**
+ * Direct service-role PATCH for test setup and cleanup.
+ * Never use this for user-facing assertions — it bypasses RLS.
+ */
+async function dbPatch(
+  table: string,
+  filter: string,
+  updates: Record<string, unknown>,
+): Promise<void> {
+  const res = await fetch(`${BASE}/rest/v1/${table}?${filter}`, {
+    method: "PATCH",
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${SVC_KEY}`,
+      "apikey": SVC_KEY,
+      "Prefer": "return=minimal",
+    },
+    body: JSON.stringify(updates),
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`dbPatch(${table} ${filter}) failed: ${res.status} ${text}`);
+  }
+  await res.text(); // drain body
+}
+
+/**
+ * First skill_id for each class — used in CHOOSE_SKILL integration tests.
+ * Must be a valid skill_id in CLASS_SKILLS for that class.
+ */
+const CLASS_FIRST_SKILL: Record<string, string> = {
+  "Rogue":         "shadow_step",
+  "War Mage":      "arcane_burst",
+  "Warden":        "iron_guard",
+  "Plague Doctor": "toxin_expertise",
+  "Hex Blade":     "curse",
+};
 
 // ── Turn lifecycle (§4) ───────────────────────────────────────────
 
@@ -416,6 +454,388 @@ Deno.test("integration: canonical_command EDIT_PROFILE updates character name", 
   const rows = await dbSelect("canonical_state", `character_id=eq.${CHAR_A}`);
   const state = (rows as Record<string, unknown>[])[0];
   assertEquals(state.character_name, newName);
+});
+
+// ── canonical_command atomic RPC — test A ────────────────────────
+//
+// A: BUY_ITEM succeeds →
+//      gold decreases by cost, item appended to inventory,
+//      exactly one revision created, revision snapshot reflects
+//      post-purchase state (not pre-purchase), canonical_events written.
+
+Deno.test("canonical_command A: BUY_ITEM — gold decreases, item added, one revision, post-command snapshot", async () => {
+  if (!TOKEN_A || !CHAR_A) return;
+
+  // Capture original state for teardown
+  const origRows = await dbSelect("canonical_state", `character_id=eq.${CHAR_A}`);
+  const origState = (origRows as Record<string, unknown>[])[0];
+  const origGold = origState.gold as number;
+  const origInventory = (origState.inventory as unknown[]) ?? [];
+
+  // Ensure the character has at least 5 gold (iron_ration costs 5)
+  const setupGold = Math.max(origGold, 50);
+  if (origGold < 5) {
+    await dbPatch("canonical_state", `character_id=eq.${CHAR_A}`, { gold: setupGold });
+  }
+
+  let revisionId = "";
+  try {
+    const res = await invokeAs(TOKEN_A, "canonical_command", {
+      character_id: CHAR_A,
+      command: "BUY_ITEM",
+      item_id: "item_iron_ration",
+    });
+
+    assertEquals(res.ok, true);
+    const data = await res.json() as Record<string, unknown>;
+    assertEquals(data.status, "OK");
+    assertExists(data.revision_id);
+    revisionId = data.revision_id as string;
+
+    // revision_id is UUID-based (format: cmd_<uuid>)
+    assertEquals(typeof revisionId, "string");
+    assertEquals(revisionId.startsWith("cmd_"), true);
+
+    // ── Verify canonical_state ────────────────────────────────────
+    const afterRows = await dbSelect("canonical_state", `character_id=eq.${CHAR_A}`);
+    const afterState = (afterRows as Record<string, unknown>[])[0];
+
+    // Gold must have decreased by exactly 5
+    assertEquals(afterState.gold as number, setupGold - 5);
+
+    // Inventory must have grown by one item; the new item is item_iron_ration
+    const afterInventory = afterState.inventory as Record<string, unknown>[];
+    assertEquals(afterInventory.length, origInventory.length + 1);
+    const newItem = afterInventory[afterInventory.length - 1];
+    assertEquals(newItem.id, "item_iron_ration");
+
+    // ── Verify revision row ───────────────────────────────────────
+    const revRows = await dbSelect("revisions", `id=eq.${revisionId}`);
+    assertEquals(revRows.length, 1);
+    const rev = revRows[0] as Record<string, unknown>;
+    assertEquals(rev.character_id, CHAR_A);
+
+    // Snapshot must reflect POST-command state (fix for the pre-command snapshot bug)
+    const snapshot = rev.state_snapshot as Record<string, unknown>;
+    assertEquals(
+      snapshot.gold as number,
+      setupGold - 5,
+      "revision snapshot must contain post-command gold, not pre-command gold",
+    );
+
+    // ── Verify canonical_events row ───────────────────────────────
+    const evtRows = await dbSelect("canonical_events", `revision_id=eq.${revisionId}`);
+    assertEquals(evtRows.length >= 1, true, "at least one canonical_event must be written");
+    const purchaseEvt = (evtRows as Record<string, unknown>[]).find(
+      (e) => (e.event_type as string).startsWith("ITEM_PURCHASED"),
+    );
+    assertExists(purchaseEvt, "ITEM_PURCHASED event must exist");
+
+  } finally {
+    // Restore original gold and inventory regardless of test outcome
+    await dbPatch("canonical_state", `character_id=eq.${CHAR_A}`, {
+      gold: origGold,
+      inventory: origInventory,
+    });
+  }
+});
+
+// ── canonical_command atomic RPC — test B ────────────────────────
+//
+// B: CHOOSE_SKILL succeeds →
+//      skill key added to skills jsonb, revision created with
+//      correct unlocked_at_level, SKILL_LEARNED event written.
+
+Deno.test("canonical_command B: CHOOSE_SKILL — skill added, unlocked_at_level set, revision snapshot correct", async () => {
+  if (!TOKEN_A || !CHAR_A) return;
+
+  // Read character class and current state for teardown
+  const origRows = await dbSelect("canonical_state", `character_id=eq.${CHAR_A}`);
+  const charState = (origRows as Record<string, unknown>[])[0];
+  const charClass = (charState.character_class as string) ?? "Rogue";
+  const origSkills = (charState.skills as Record<string, unknown>) ?? {};
+  const origLevel = charState.level as number;
+
+  // skill_id must belong to the character's class (class-catalogue check in Edge Fn)
+  const skillId = CLASS_FIRST_SKILL[charClass] ?? "shadow_step";
+
+  // Set up a clean state: empty skills + level 5 (guarantees 4 available slots)
+  await dbPatch("canonical_state", `character_id=eq.${CHAR_A}`, {
+    skills: {},
+    level: 5,
+  });
+
+  let revisionId = "";
+  try {
+    const res = await invokeAs(TOKEN_A, "canonical_command", {
+      character_id: CHAR_A,
+      command: "CHOOSE_SKILL",
+      skill_id: skillId,
+    });
+
+    assertEquals(res.ok, true);
+    const data = await res.json() as Record<string, unknown>;
+    assertEquals(data.status, "OK");
+    assertExists(data.revision_id);
+    revisionId = data.revision_id as string;
+    assertEquals(revisionId.startsWith("cmd_"), true);
+
+    // ── Verify canonical_state ────────────────────────────────────
+    const afterRows = await dbSelect("canonical_state", `character_id=eq.${CHAR_A}`);
+    const afterState = (afterRows as Record<string, unknown>[])[0];
+    const afterSkills = (afterState.skills as Record<string, unknown>) ?? {};
+
+    assertExists(afterSkills[skillId], `skill "${skillId}" must be in skills after CHOOSE_SKILL`);
+    const learnedSkill = afterSkills[skillId] as Record<string, unknown>;
+    assertExists(learnedSkill.name, "learned skill must have a name");
+    assertExists(learnedSkill.desc, "learned skill must have a desc");
+    // unlocked_at_level must equal the level at the time of learning (5)
+    assertEquals(learnedSkill.unlocked_at_level as number, 5);
+
+    // ── Verify revision snapshot ──────────────────────────────────
+    const revRows = await dbSelect("revisions", `id=eq.${revisionId}`);
+    assertEquals(revRows.length, 1);
+    const snapshot = (revRows[0] as Record<string, unknown>).state_snapshot as Record<string, unknown>;
+    const snapshotSkills = snapshot.skills as Record<string, unknown>;
+    assertExists(snapshotSkills[skillId], "revision snapshot must include the newly learned skill");
+
+    // ── Verify canonical_events ───────────────────────────────────
+    const evtRows = await dbSelect("canonical_events", `revision_id=eq.${revisionId}`);
+    const learnEvt = (evtRows as Record<string, unknown>[]).find(
+      (e) => (e.event_type as string).startsWith("SKILL_LEARNED"),
+    );
+    assertExists(learnEvt, "SKILL_LEARNED event must exist");
+
+  } finally {
+    // Restore original skills and level
+    await dbPatch("canonical_state", `character_id=eq.${CHAR_A}`, {
+      skills: origSkills,
+      level: origLevel,
+    });
+  }
+});
+
+// ── canonical_command atomic RPC — test D ────────────────────────
+//
+// D: Failure atomicity — a CHOOSE_SKILL for an already-learned skill
+//    must return 422, leave canonical_state unchanged, and create no
+//    new revision or canonical_event row.
+
+Deno.test("canonical_command D: failure atomicity — duplicate CHOOSE_SKILL leaves state/revisions/events unchanged", async () => {
+  if (!TOKEN_A || !CHAR_A) return;
+
+  const origRows = await dbSelect("canonical_state", `character_id=eq.${CHAR_A}`);
+  const charState = (origRows as Record<string, unknown>[])[0];
+  const charClass = (charState.character_class as string) ?? "Rogue";
+  const origSkills = (charState.skills as Record<string, unknown>) ?? {};
+  const origLevel = charState.level as number;
+  const skillId = CLASS_FIRST_SKILL[charClass] ?? "shadow_step";
+
+  // Seed: character already knows this skill, and has open slots
+  const seededSkills = {
+    [skillId]: { name: "Test Skill", desc: "For D atomicity test", unlocked_at_level: 2 },
+  };
+  await dbPatch("canonical_state", `character_id=eq.${CHAR_A}`, {
+    skills: seededSkills,
+    level: 5,
+  });
+
+  // Capture latest revision before the failing command
+  const revsBefore = await dbSelect(
+    "revisions",
+    `character_id=eq.${CHAR_A}&order=created_at.desc`,
+  );
+  const latestRevIdBefore = (revsBefore[0] as Record<string, unknown>)?.id as string | undefined;
+
+  try {
+    const res = await invokeAs(TOKEN_A, "canonical_command", {
+      character_id: CHAR_A,
+      command: "CHOOSE_SKILL",
+      skill_id: skillId,  // already learned — RPC must raise skill_already_learned
+    });
+
+    // ── Must fail with 422 ────────────────────────────────────────
+    assertEquals(res.status, 422);
+    const data = await res.json() as Record<string, unknown>;
+    assertEquals(data.error, "skill_already_learned");
+
+    // ── canonical_state must be unchanged ─────────────────────────
+    const stateAfter = await dbSelect("canonical_state", `character_id=eq.${CHAR_A}`);
+    const skillsAfter = (stateAfter[0] as Record<string, unknown>).skills as Record<string, unknown>;
+    assertEquals(Object.keys(skillsAfter).length, 1, "only one skill (the seeded one) must be present");
+    assertExists(skillsAfter[skillId], "the seeded skill must still be there");
+
+    // ── No new revision must have been created ────────────────────
+    const revsAfter = await dbSelect(
+      "revisions",
+      `character_id=eq.${CHAR_A}&order=created_at.desc`,
+    );
+    const latestRevIdAfter = (revsAfter[0] as Record<string, unknown>)?.id as string | undefined;
+    assertEquals(
+      latestRevIdAfter,
+      latestRevIdBefore,
+      "latest revision_id must be unchanged — the failed command must write no revision",
+    );
+
+  } finally {
+    await dbPatch("canonical_state", `character_id=eq.${CHAR_A}`, {
+      skills: origSkills,
+      level: origLevel,
+    });
+  }
+});
+
+// ── canonical_command atomic RPC — test E ────────────────────────
+//
+// E: BUY_ITEM with insufficient gold → 422 insufficient_gold,
+//    gold and inventory untouched, no revision or event created.
+
+Deno.test("canonical_command E: BUY_ITEM insufficient gold → 422, state/revisions/events unchanged", async () => {
+  if (!TOKEN_A || !CHAR_A) return;
+
+  const origRows = await dbSelect("canonical_state", `character_id=eq.${CHAR_A}`);
+  const origState = (origRows as Record<string, unknown>[])[0];
+  const origGold = origState.gold as number;
+  const origInventory = origState.inventory as unknown[];
+
+  // Set gold to 4 — iron_ration costs 5, so this must fail
+  await dbPatch("canonical_state", `character_id=eq.${CHAR_A}`, { gold: 4 });
+
+  const revsBefore = await dbSelect(
+    "revisions",
+    `character_id=eq.${CHAR_A}&order=created_at.desc`,
+  );
+  const latestRevIdBefore = (revsBefore[0] as Record<string, unknown>)?.id as string | undefined;
+
+  try {
+    const res = await invokeAs(TOKEN_A, "canonical_command", {
+      character_id: CHAR_A,
+      command: "BUY_ITEM",
+      item_id: "item_iron_ration",  // costs 5, character has 4
+    });
+
+    // ── Must fail with 422 insufficient_gold ──────────────────────
+    assertEquals(res.status, 422);
+    const data = await res.json() as Record<string, unknown>;
+    assertEquals(data.error, "insufficient_gold");
+
+    // ── Gold must still be 4 ──────────────────────────────────────
+    const afterRows = await dbSelect("canonical_state", `character_id=eq.${CHAR_A}`);
+    const afterState = (afterRows as Record<string, unknown>[])[0];
+    assertEquals(afterState.gold as number, 4, "gold must remain at 4 after failed purchase");
+
+    // ── Inventory must be unchanged ───────────────────────────────
+    const afterInventory = afterState.inventory as unknown[];
+    assertEquals(
+      afterInventory.length,
+      origInventory.length,
+      "inventory length must be unchanged after failed purchase",
+    );
+
+    // ── No new revision ───────────────────────────────────────────
+    const revsAfter = await dbSelect(
+      "revisions",
+      `character_id=eq.${CHAR_A}&order=created_at.desc`,
+    );
+    const latestRevIdAfter = (revsAfter[0] as Record<string, unknown>)?.id as string | undefined;
+    assertEquals(
+      latestRevIdAfter,
+      latestRevIdBefore,
+      "no new revision must be created for a failed BUY_ITEM",
+    );
+
+  } finally {
+    await dbPatch("canonical_state", `character_id=eq.${CHAR_A}`, {
+      gold: origGold,
+      inventory: origInventory,
+    });
+  }
+});
+
+// ── canonical_command atomic RPC — test F ────────────────────────
+//
+// F: Two concurrent BUY_ITEM requests for the same item when the
+//    character has gold for exactly one purchase.
+//    SELECT FOR UPDATE serialises the two calls: the second reads
+//    the committed (reduced) balance and must fail with insufficient_gold.
+//    Invariant: gold is never negative; exactly one revision created.
+
+Deno.test("canonical_command F: concurrent BUY_ITEM — SELECT FOR UPDATE prevents double-spend", async () => {
+  if (!TOKEN_A || !CHAR_A) return;
+
+  const origRows = await dbSelect("canonical_state", `character_id=eq.${CHAR_A}`);
+  const origState = (origRows as Record<string, unknown>[])[0];
+  const origGold = origState.gold as number;
+  const origInventory = origState.inventory as unknown[];
+
+  // Set gold to exactly 5 (cost of one iron_ration) — only one purchase can succeed
+  await dbPatch("canonical_state", `character_id=eq.${CHAR_A}`, {
+    gold: 5,
+    inventory: [],
+  });
+
+  const revsBefore = await dbSelect(
+    "revisions",
+    `character_id=eq.${CHAR_A}&order=created_at.desc`,
+  );
+  const revCountBefore = revsBefore.length;
+
+  try {
+    // Fire two simultaneous requests — Promise.all races them at the network level
+    const [res1, res2] = await Promise.all([
+      invokeAs(TOKEN_A, "canonical_command", {
+        character_id: CHAR_A,
+        command: "BUY_ITEM",
+        item_id: "item_iron_ration",
+      }),
+      invokeAs(TOKEN_A, "canonical_command", {
+        character_id: CHAR_A,
+        command: "BUY_ITEM",
+        item_id: "item_iron_ration",
+      }),
+    ]);
+    const [d1, d2] = (await Promise.all([res1.json(), res2.json()])) as Record<string, unknown>[];
+    void d1; void d2; // bodies drained; status codes carry the verdict
+
+    const successCount = [res1.ok, res2.ok].filter(Boolean).length;
+
+    // ── Core invariant: gold is never negative ────────────────────
+    const afterRows = await dbSelect("canonical_state", `character_id=eq.${CHAR_A}`);
+    const finalGold = (afterRows[0] as Record<string, unknown>).gold as number;
+    assertEquals(finalGold >= 0, true, "gold must never go negative (SELECT FOR UPDATE prevents double-spend)");
+
+    // ── Gold delta matches the number of successful purchases ─────
+    assertEquals(
+      finalGold,
+      5 - 5 * successCount,
+      `gold must be 5 - 5*${successCount} = ${5 - 5 * successCount}`,
+    );
+
+    // ── At most one purchase can succeed (we started with gold=5) ─
+    assertEquals(
+      successCount <= 1,
+      true,
+      "SELECT FOR UPDATE must prevent both concurrent purchases from succeeding",
+    );
+
+    // ── Number of new revisions equals successful purchases ───────
+    const revsAfter = await dbSelect(
+      "revisions",
+      `character_id=eq.${CHAR_A}&order=created_at.desc`,
+    );
+    const newRevCount = revsAfter.length - revCountBefore;
+    assertEquals(
+      newRevCount,
+      successCount,
+      "each successful purchase must produce exactly one revision",
+    );
+
+  } finally {
+    await dbPatch("canonical_state", `character_id=eq.${CHAR_A}`, {
+      gold: origGold,
+      inventory: origInventory,
+    });
+  }
 });
 
 // ── Autosave failure escalation contract (§11.3) ──────────────────
