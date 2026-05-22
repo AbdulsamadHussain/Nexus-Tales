@@ -615,7 +615,7 @@ async function checkStoryBeats(
         await supabase
           .from("player_campaign_state")
           .update({ current_scene: newScene })
-          .eq("user_id", userId)
+          .eq("character_id", characterId)
           .eq("campaign_id", campaignId);
 
         narrationHints.push(`SCENE_TRANSITION:${newScene}`);
@@ -652,7 +652,7 @@ async function checkStoryBeats(
         beaten_beats: [...beatenBeats, ...fired],
         last_played_at: new Date().toISOString(),
       })
-      .eq("user_id", userId)
+      .eq("character_id", characterId)
       .eq("campaign_id", campaignId);
   }
 
@@ -1019,7 +1019,7 @@ if (import.meta.main) serve(async (req: Request) => {
     let { data: campaignState } = await supabase
       .from("player_campaign_state")
       .select("*")
-      .eq("user_id", user_id)
+      .eq("character_id", character_id)
       .eq("campaign_id", state.campaign_id)
       .maybeSingle();
 
@@ -1028,6 +1028,7 @@ if (import.meta.main) serve(async (req: Request) => {
         .from("player_campaign_state")
         .insert({
           user_id,
+          character_id: character_id,
           campaign_id: state.campaign_id,
           current_scene: state.current_location,
           beaten_beats: [],
@@ -1143,7 +1144,7 @@ if (import.meta.main) serve(async (req: Request) => {
           npc_states: mergedNpcStates,
           last_played_at: new Date().toISOString(),
         })
-        .eq("user_id", user_id)
+        .eq("character_id", character_id)
         .eq("campaign_id", state.campaign_id);
     }
 

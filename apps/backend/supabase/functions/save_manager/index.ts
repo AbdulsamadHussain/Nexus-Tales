@@ -90,7 +90,7 @@ if (import.meta.main) serve(async (req: Request) => {
       const { data: campaignState } = await supabase
         .from("player_campaign_state")
         .select("*")
-        .eq("user_id", user_id)
+        .eq("character_id", character_id)
         .eq("campaign_id", state.campaign_id)
         .maybeSingle();
 
@@ -197,7 +197,7 @@ if (import.meta.main) serve(async (req: Request) => {
       if (restoreError) throw restoreError;
 
       // Restore campaign state
-      if (campaignState && campaignState.campaign_id) {
+      if (campaignState && campaignState.campaign_id && restoreCharacterId) {
         await supabase
           .from("player_campaign_state")
           .update({
@@ -206,7 +206,7 @@ if (import.meta.main) serve(async (req: Request) => {
             beaten_beats: campaignState.beaten_beats,
             scene_item_states: campaignState.scene_item_states,
           })
-          .eq("user_id", user_id)
+          .eq("character_id", restoreCharacterId)
           .eq("campaign_id", campaignState.campaign_id);
       }
 

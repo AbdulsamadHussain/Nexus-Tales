@@ -101,7 +101,7 @@ class _GameScreenState extends ConsumerState<GameScreen> {
       final pcs = await Supabase.instance.client
           .from('player_campaign_state')
           .select('npc_states')
-          .eq('user_id', user.id)
+          .eq('character_id', widget.characterId)
           .eq('campaign_id', campaignId)
           .maybeSingle();
 
