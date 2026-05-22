@@ -3,7 +3,11 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../game/game_screen.dart';
 
 class CharacterSetupScreen extends StatefulWidget {
-  const CharacterSetupScreen({super.key});
+  /// If non-null, the character will be placed into this custom campaign
+  /// instead of the default campaign_01.
+  final Map<String, dynamic>? customCampaign;
+
+  const CharacterSetupScreen({super.key, this.customCampaign});
 
   @override
   State<CharacterSetupScreen> createState() => _CharacterSetupScreenState();
@@ -53,6 +57,8 @@ class _CharacterSetupScreenState extends State<CharacterSetupScreen> {
   final _classes = ['Rogue', 'War Mage', 'Warden', 'Plague Doctor', 'Hex Blade'];
   final _origins = ['Street Rat', 'Academy Exile', 'Fallen Knight', 'Cultist Survivor', 'Merchant'];
 
+  bool get _isCustomCampaign => widget.customCampaign != null;
+
   @override
   void dispose() {
     _nameController.dispose();
@@ -60,13 +66,6 @@ class _CharacterSetupScreenState extends State<CharacterSetupScreen> {
   }
 
   Future<void> _startGame() async {
-  final session = Supabase.instance.client.auth.currentSession;
-  debugPrint('=== SESSION TOKEN ===');
-  debugPrint(session?.accessToken?.substring(0, 50) ?? 'NULL');
-  debugPrint('=== USER ID ===');
-  debugPrint(Supabase.instance.client.auth.currentUser?.id ?? 'NULL');
-  debugPrint('=== END ===');
-
     if (!_useCustom && _selectedPreset == null) return;
     if (_useCustom && _nameController.text.trim().isEmpty) return;
     setState(() => _busy = true);
@@ -99,6 +98,11 @@ class _CharacterSetupScreenState extends State<CharacterSetupScreen> {
         };
       }
 
+      // Attach custom campaign payload if coming from CreateCampaignScreen
+      if (_isCustomCampaign) {
+        characterData['custom_campaign'] = widget.customCampaign;
+      }
+
       await Supabase.instance.client.functions.invoke(
         'create_character',
         body: characterData,
@@ -126,9 +130,15 @@ class _CharacterSetupScreenState extends State<CharacterSetupScreen> {
       backgroundColor: const Color(0xFF0A0C10),
       appBar: AppBar(
         backgroundColor: const Color(0xFF0F1219),
-        title: const Text(
-          'CHOOSE YOUR CHARACTER',
-          style: TextStyle(
+        leading: _isCustomCampaign
+            ? IconButton(
+                icon: const Icon(Icons.arrow_back, color: Color(0xFF4A9EFF)),
+                onPressed: () => Navigator.of(context).pop(),
+              )
+            : null,
+        title: Text(
+          _isCustomCampaign ? 'CHOOSE YOUR CHARACTER' : 'CHOOSE YOUR CHARACTER',
+          style: const TextStyle(
             letterSpacing: 3,
             color: Color(0xFFC9A84C),
             fontSize: 14,
@@ -140,6 +150,36 @@ class _CharacterSetupScreenState extends State<CharacterSetupScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
+            if (_isCustomCampaign) ...[
+              Container(
+                padding: const EdgeInsets.all(12),
+                margin: const EdgeInsets.only(bottom: 20),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF0F1A2E),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: const Color(0xFF2D7DD2).withOpacity(0.4)),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      widget.customCampaign!['title'] as String,
+                      style: const TextStyle(
+                        color: Color(0xFFC9A84C),
+                        fontSize: 14,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      'Custom world · ${_toneLabel(widget.customCampaign!['narrator_tone'] as String)}',
+                      style: const TextStyle(color: Color(0xFF4A9EFF), fontSize: 11, letterSpacing: 0.5),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+
             // Toggle
             Row(
               children: [
@@ -151,10 +191,8 @@ class _CharacterSetupScreenState extends State<CharacterSetupScreen> {
             const SizedBox(height: 24),
 
             if (!_useCustom) ...[
-              // Preset cards
               ..._presets.map((preset) => _presetCard(preset)),
             ] else ...[
-              // Custom character
               _sectionLabel('Character name'),
               TextField(
                 controller: _nameController,
@@ -190,9 +228,7 @@ class _CharacterSetupScreenState extends State<CharacterSetupScreen> {
               style: ElevatedButton.styleFrom(
                 backgroundColor: const Color(0xFF2D7DD2),
                 padding: const EdgeInsets.symmetric(vertical: 16),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(6),
-                ),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
               ),
               child: _busy
                   ? const SizedBox(
@@ -209,6 +245,18 @@ class _CharacterSetupScreenState extends State<CharacterSetupScreen> {
         ),
       ),
     );
+  }
+
+  String _toneLabel(String tone) {
+    const labels = {
+      'grimdark': 'Grimdark',
+      'epic': 'Epic Fantasy',
+      'horror': 'Cosmic Horror',
+      'dark_comedy': 'Dark Comedy',
+      'gritty': 'Gritty Realism',
+      'mythic': 'Mythic',
+    };
+    return labels[tone] ?? tone;
   }
 
   Widget _presetCard(Map<String, dynamic> preset) {
@@ -263,10 +311,7 @@ class _CharacterSetupScreenState extends State<CharacterSetupScreen> {
                   const SizedBox(height: 4),
                   Text(
                     preset['description'] as String,
-                    style: const TextStyle(
-                      color: Color(0xFF8898B0),
-                      fontSize: 12,
-                    ),
+                    style: const TextStyle(color: Color(0xFF8898B0), fontSize: 12),
                   ),
                   const SizedBox(height: 8),
                   Row(

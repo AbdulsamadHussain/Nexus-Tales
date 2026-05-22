@@ -29,12 +29,14 @@ class _GameScreenState extends ConsumerState<GameScreen> {
   String? _lastRevisionId;
   Map<String, dynamic>? _canonicalState;
   Map<String, dynamic>? _userPreferences;
+  Map<String, dynamic>? _campaign;
 
   @override
   void initState() {
     super.initState();
     _loadCanonicalState();
     _loadUserPreferences();
+    _loadCampaign();
   }
 
   @override
@@ -52,6 +54,24 @@ class _GameScreenState extends ConsumerState<GameScreen> {
         .eq('user_id', user.id)
         .single();
     setState(() => _canonicalState = data);
+  }
+
+  Future<void> _loadCampaign() async {
+    final user = Supabase.instance.client.auth.currentUser!;
+    final state = await Supabase.instance.client
+        .from('canonical_state')
+        .select('campaign_id')
+        .eq('user_id', user.id)
+        .maybeSingle();
+    if (state == null) return;
+    final campaignId = state['campaign_id'] as String?;
+    if (campaignId == null) return;
+    final data = await Supabase.instance.client
+        .from('campaigns')
+        .select('title, narrator_tone, world_description, is_custom')
+        .eq('id', campaignId)
+        .maybeSingle();
+    if (data != null && mounted) setState(() => _campaign = data);
   }
 
   Future<void> _loadUserPreferences() async {
@@ -225,6 +245,29 @@ class _GameScreenState extends ConsumerState<GameScreen> {
     }
   }
 
+  String _buildSystemPrompt(String constraintText) {
+    final tone = _campaign?['narrator_tone'] as String? ?? 'grimdark';
+    final worldDesc = _campaign?['world_description'] as String? ?? '';
+
+    final toneInstruction = switch (tone) {
+      'epic'       => 'Epic and grand. Heroes, ancient evils, world-shaking stakes.',
+      'horror'     => 'Dread and the unknowable. Sanity erodes. Survival is uncertain.',
+      'dark_comedy'=> 'Sardonic and bleak. Absurdity undercuts horror. Wry, not warm.',
+      'gritty'     => 'Low fantasy, brutal and grounded. No chosen ones. Politics and survival.',
+      'mythic'     => 'Legendary in scale. Fate, gods, and impossible deeds.',
+      _            => 'Grimdark. Brutal, morally ambiguous, no safe heroes.',
+    };
+
+    final worldSection = worldDesc.isNotEmpty
+        ? '\n\nWorld context: $worldDesc'
+        : '';
+
+    return 'You are a game master narrator. Respond ONLY with vivid narrative prose. '
+        'No thinking. No reasoning. No tags. No preamble. '
+        '2-4 sentences maximum. Second person present tense. '
+        'Tone: $toneInstruction$worldSection$constraintText';
+  }
+
   Future<String> _callOllama(
     String context,
     String tier, {
@@ -235,6 +278,9 @@ class _GameScreenState extends ConsumerState<GameScreen> {
       final constraintText = constraints.isNotEmpty
           ? ' Content restrictions: ${constraints.join(", ")}. Obey these strictly.'
           : '';
+
+      final systemPrompt = _buildSystemPrompt(constraintText);
+
       final uri = Uri.parse('http://localhost:11434/api/generate');
       final httpResponse = await http
           .post(
@@ -242,11 +288,7 @@ class _GameScreenState extends ConsumerState<GameScreen> {
             headers: {'Content-Type': 'application/json'},
             body: jsonEncode({
               'model': 'gemma4:e2b',
-              'system':
-                  'You are a dark fantasy game master narrator. '
-                  'Respond ONLY with vivid narrative prose. '
-                  'No thinking. No reasoning. No tags. No preamble. '
-                  '2-4 sentences maximum. Second person present tense.$constraintText',
+              'system': systemPrompt,
 
               'prompt': context,
               'stream': false,

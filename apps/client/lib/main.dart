@@ -3,8 +3,7 @@ import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'features/auth/auth_screen.dart';
-import 'features/character/character_setup_screen.dart';
-import 'features/game/game_screen.dart';
+import 'features/campaign/new_game_screen.dart';
 
 // test@nexustale.com test1234
 
@@ -67,7 +66,7 @@ class _RootRouterState extends State<RootRouter> {
         if (session == null) {
           return const AuthScreen();
         }
-        return const CharacterSetupScreen();
+        return const NewGameScreen();
       },
     );
   }
