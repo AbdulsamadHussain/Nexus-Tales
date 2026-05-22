@@ -89,8 +89,15 @@ serve(async (req: Request) => {
         .eq("is_start_scene", true)
         .maybeSingle();
 
+      if (!startScene) {
+        return new Response(
+          JSON.stringify({ error: "Campaign has no starting scene — cannot create character" }),
+          { status: 422, headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" } },
+        );
+      }
+
       campaignId = existingId;
-      startLocation = startScene?.id ?? `scene_${campaignId}_start`;
+      startLocation = startScene.id;
 
     } else if (body.custom_campaign) {
       const cc = body.custom_campaign as {

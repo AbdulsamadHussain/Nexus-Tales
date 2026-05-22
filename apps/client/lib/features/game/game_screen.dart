@@ -1506,8 +1506,8 @@ Input: "the cabinet I need what is inside" → {"route": "ROLL_REQUIRED", "actio
           'character_id': widget.characterId,
           'revision_id': data['revision_id'],
           'trigger_type': 'hard',
-          // events and narration_context are loaded server-side from the stored revision
-          'ollama_url': 'http://localhost:11434',
+          // ollama_url intentionally omitted — server reads OLLAMA_URL env var.
+          // Sending it from the client would create an SSRF vector.
         },
       );
       debugPrint(

@@ -274,12 +274,14 @@ if (import.meta.main) serve(async (req: Request) => {
 
       const snapshot = save.state_snapshot as Record<string, unknown>;
 
-      // Load the linked revision for full reproduction context
+      // Load the linked revision for full reproduction context.
+      // character_id filter prevents cross-character revision exposure.
       const { data: revision } = await supabase
         .from("revisions")
         .select("id, previous_id, player_action, route_category, success_tier, events, created_at")
         .eq("id", save.revision_id)
         .eq("user_id", user_id)
+        .eq("character_id", character_id)
         .maybeSingle();
 
       return jsonResponse({

@@ -6,10 +6,9 @@ interface SummaryRequest {
   character_id: string;
   revision_id: string;
   trigger_type: "hard" | "soft";
-  ollama_url?: string;
-  // events and narration_context are intentionally absent from the client payload.
-  // summary_worker loads the revision from DB and derives both server-side,
-  // preventing fabricated event lists or injected context strings.
+  // ollama_url is intentionally absent — the server reads OLLAMA_URL from env.
+  // Accepting it from the client would allow SSRF (redirecting server fetches
+  // to arbitrary internal URLs).
 }
 
 export function buildFallbackSummary(
@@ -69,7 +68,9 @@ if (import.meta.main) serve(async (req: Request) => {
     const user_id = user.id;
 
     const body: SummaryRequest = await req.json();
-    const { character_id, revision_id, trigger_type, ollama_url } = body;
+    const { character_id, revision_id, trigger_type } = body;
+    // Server-authoritative Ollama URL — never from client input (SSRF prevention)
+    const ollama_url = Deno.env.get("OLLAMA_URL");
 
     if (!character_id || !revision_id) {
       return jsonResponse({ error: "Missing required fields: character_id, revision_id" }, 400);
@@ -132,8 +133,7 @@ ${serverContext.slice(0, 800)}
 Write only the summary, 2-3 sentences maximum.`;
 
     // ── Call Ollama for summary generation ────────────────────────
-    // Note: summary_worker is called from Flutter which passes the
-    // ollama_url since Edge Functions can't reach localhost.
+    // OLLAMA_URL is read from server env — never from the client request.
     let summaryText = "";
 
     if (ollama_url) {

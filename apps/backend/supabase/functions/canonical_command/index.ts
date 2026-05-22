@@ -152,6 +152,10 @@ if (import.meta.main) serve(async (req: Request) => {
     const revision_id = generateRevisionId();
     const events: string[] = [];
     const stateDelta: Record<string, unknown> = {};
+    // postCommandPatch accumulates the fields written to canonical_state.
+    // Merged with pre-command state before the revision snapshot so the revision
+    // captures what actually exists in the DB after this command completes.
+    const postCommandPatch: Record<string, unknown> = {};
 
     // ── BUY_ITEM ──────────────────────────────────────────────────
     if (command === "BUY_ITEM") {
@@ -183,6 +187,8 @@ if (import.meta.main) serve(async (req: Request) => {
       if (updateErr) throw updateErr;
 
       stateDelta.gold = -catalogItem.cost;
+      postCommandPatch.gold = newGold;
+      postCommandPatch.inventory = inventory;
       events.push(`ITEM_PURCHASED:${item_id}`);
     }
 
@@ -228,6 +234,7 @@ if (import.meta.main) serve(async (req: Request) => {
 
       if (updateErr) throw updateErr;
 
+      postCommandPatch.skills = updatedSkills;
       events.push(`SKILL_LEARNED:${skill_id}`);
     }
 
@@ -257,6 +264,7 @@ if (import.meta.main) serve(async (req: Request) => {
 
       if (updateErr) throw updateErr;
 
+      Object.assign(postCommandPatch, updates);
       events.push("PROFILE_EDITED");
     }
 
@@ -273,7 +281,7 @@ if (import.meta.main) serve(async (req: Request) => {
         route_category: "UI_ACTION",
         gateway_decision: "ALLOW",
         success_tier: "NO_ROLL",
-        state_snapshot: state,
+        state_snapshot: { ...state, ...postCommandPatch },
         events,
         autosave_candidate: false,
         narration_done: true,

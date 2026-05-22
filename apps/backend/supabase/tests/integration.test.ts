@@ -4,6 +4,7 @@
  * Required env vars:
  *   SUPABASE_URL          — project URL
  *   SVC_ROLE_KEY          — service role key (used only for direct REST queries, never for user-facing calls)
+ *   SUPABASE_ANON_KEY     — public anon key (used as apikey for user-JWT REST calls so RLS applies)
  *   QA_USER_TOKEN         — valid Supabase JWT for qa_user_a (obtain via signInWithPassword)
  *   QA_USER_TOKEN_B       — valid Supabase JWT for qa_user_b
  *   QA_CHARACTER_ID       — character_id owned by qa_user_a
@@ -23,6 +24,9 @@ import {
 
 const BASE = Deno.env.get("SUPABASE_URL")!;
 const SVC_KEY = Deno.env.get("SVC_ROLE_KEY")!;
+// Anon key — used for user-authenticated REST calls (lets RLS apply correctly).
+// Using SVC_KEY as apikey would bypass RLS, producing false-positive test results.
+const ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY")!;
 
 // User A — primary QA user
 const TOKEN_A = Deno.env.get("QA_USER_TOKEN");
@@ -308,6 +312,9 @@ Deno.test("integration: direct client UPDATE on canonical_state is denied after 
   // Any direct PATCH/update through the client (anon key + JWT) must fail with 0 rows affected.
   if (!TOKEN_A || !CHAR_A) return;
 
+  // apikey must be the anon key (not service role) so PostgREST applies RLS.
+  // Using SVC_KEY as apikey would bypass RLS and the update would succeed,
+  // causing this test to produce a false negative.
   const res = await fetch(
     `${BASE}/rest/v1/canonical_state?character_id=eq.${CHAR_A}`,
     {
@@ -315,7 +322,7 @@ Deno.test("integration: direct client UPDATE on canonical_state is denied after 
       headers: {
         "Content-Type": "application/json",
         "Authorization": `Bearer ${TOKEN_A}`,
-        "apikey": SVC_KEY,
+        "apikey": ANON_KEY,
         "Prefer": "return=representation",
       },
       body: JSON.stringify({ gold: 99999 }),
