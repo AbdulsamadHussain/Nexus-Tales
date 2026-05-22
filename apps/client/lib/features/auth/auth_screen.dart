@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
-import '../character/character_setup_screen.dart';
+import '../campaign/new_game_screen.dart';
 
 class AuthScreen extends StatefulWidget {
   const AuthScreen({super.key});
@@ -46,7 +46,7 @@ class _AuthScreenState extends State<AuthScreen> {
       if (mounted) {
         Navigator.of(context).pushReplacement(
           MaterialPageRoute(
-            builder: (_) => const CharacterSetupScreen(),
+            builder: (_) => const NewGameScreen(),
           ),
         );
       }

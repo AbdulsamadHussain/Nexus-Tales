@@ -5,7 +5,8 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'features/auth/auth_screen.dart';
 import 'features/campaign/new_game_screen.dart';
 
-// test@nexustale.com test1234
+// test@nexustale.com 
+// test1234
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();

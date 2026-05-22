@@ -2,6 +2,23 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
+// XP thresholds: level N requires N*100 XP (level 1→2 needs 100, 2→3 needs 200, etc.)
+export function xpForLevel(level: number): number {
+  return level * 100;
+}
+
+export function checkLevelUp(currentXp: number, newXp: number, currentLevel: number): { newLevel: number; didLevelUp: boolean } {
+  let level = currentLevel;
+  let xp = newXp;
+  let didLevelUp = false;
+  while (xp >= xpForLevel(level)) {
+    xp -= xpForLevel(level);
+    level++;
+    didLevelUp = true;
+  }
+  return { newLevel: level, didLevelUp };
+}
+
 type RouteCategory =
   | "NO_ROLL_DETERMINISTIC"
   | "ROLL_REQUIRED"
@@ -26,6 +43,7 @@ type SuccessTier =
 
 interface ActionPacket {
   user_id: string;
+  character_id: string;
   player_action: string;
   route_category: RouteCategory;
   action_type?: string;
@@ -475,6 +493,14 @@ export function getRelationshipTier(score: number): string {
   return "Devoted";
 }
 
+export function getNpcRelationshipScore(
+  npcId: string,
+  relationships: Record<string, unknown>,
+): number {
+  const rel = relationships[npcId] as Record<string, unknown> | undefined;
+  return (rel?.score as number) ?? 0;
+}
+
 // ── CHECK STORY BEATS ─────────────────────────────────────────────
 // After every turn, check if any story beat conditions are met.
 // If so, apply consequences and return narration hints.
@@ -482,6 +508,7 @@ export function getRelationshipTier(score: number): string {
 async function checkStoryBeats(
   supabase: ReturnType<typeof createClient>,
   userId: string,
+  characterId: string,
   campaignId: string,
   events: string[],
   state: Record<string, unknown>,
@@ -554,6 +581,7 @@ async function checkStoryBeats(
             .from("canonical_state")
             .select("inventory")
             .eq("user_id", userId)
+            .eq("character_id", characterId)
             .single();
 
           console.log(
@@ -568,7 +596,8 @@ async function checkStoryBeats(
           const { error: updateError } = await supabase
             .from("canonical_state")
             .update({ inventory: newInventory })
-            .eq("user_id", userId);
+            .eq("user_id", userId)
+            .eq("character_id", characterId);
 
           console.log("Inventory update error:", JSON.stringify(updateError));
         }
@@ -580,7 +609,8 @@ async function checkStoryBeats(
         await supabase
           .from("canonical_state")
           .update({ current_location: newScene })
-          .eq("user_id", userId);
+          .eq("user_id", userId)
+          .eq("character_id", characterId);
 
         await supabase
           .from("player_campaign_state")
@@ -598,6 +628,7 @@ async function checkStoryBeats(
           .from("canonical_state")
           .select("quest_state")
           .eq("user_id", userId)
+          .eq("character_id", characterId)
           .single();
 
         const questState =
@@ -607,7 +638,8 @@ async function checkStoryBeats(
         await supabase
           .from("canonical_state")
           .update({ quest_state: questState })
-          .eq("user_id", userId);
+          .eq("user_id", userId)
+          .eq("character_id", characterId);
       }
     }
   }
@@ -785,6 +817,7 @@ export async function evaluateSummaryTrigger(
 async function updateCodex(
   supabase: ReturnType<typeof createClient>,
   userId: string,
+  characterId: string,
   events: string[],
   npcsInScene: Record<string, unknown>[],
   scene: Record<string, unknown> | null,
@@ -858,7 +891,8 @@ async function updateCodex(
   await supabase
     .from("canonical_state")
     .update({ known_lore: updatedLore })
-    .eq("user_id", userId);
+    .eq("user_id", userId)
+    .eq("character_id", characterId);
 }
 
 
@@ -879,6 +913,7 @@ if (import.meta.main) serve(async (req: Request) => {
     const packet: ActionPacket = await req.json();
     const {
       user_id,
+      character_id,
       player_action,
       route_category,
       action_type,
@@ -904,6 +939,7 @@ if (import.meta.main) serve(async (req: Request) => {
       .from("canonical_state")
       .select("*")
       .eq("user_id", user_id)
+      .eq("character_id", character_id)
       .single();
 
     if (stateError || !state) {
@@ -1027,6 +1063,21 @@ if (import.meta.main) serve(async (req: Request) => {
 
       const dc = 14;
       roll = rollD20(modifier, dc);
+
+      // Apply NPC relationship modifier to roll outcome
+      const relationships = (state.relationships as Record<string, unknown>) ?? {};
+      if (roll && npcsInScene.length > 0) {
+        const targetNpc = findTargetNpc(player_action, npcsInScene);
+        if (targetNpc) {
+          const score = getNpcRelationshipScore(targetNpc.id as string, relationships);
+          // Trusted NPC: upgrade tier slightly (reluctant to fight)
+          if (score > 50 && roll.tier === 'PARTIAL_SUCCESS') roll.tier = 'FULL_SUCCESS';
+          if (score > 50 && roll.tier === 'FAILURE') roll.tier = 'PARTIAL_SUCCESS';
+          // Hostile NPC: downgrade tier (fights harder)
+          if (score < -50 && roll.tier === 'FULL_SUCCESS') roll.tier = 'PARTIAL_SUCCESS';
+          if (score < -50 && roll.tier === 'CRITICAL_SUCCESS') roll.tier = 'FULL_SUCCESS';
+        }
+      }
     }
 
     const npcStates = (campaignState?.npc_states as Record<string, unknown>) ??
@@ -1064,10 +1115,24 @@ if (import.meta.main) serve(async (req: Request) => {
     }
     if (delta.xp !== undefined) {
       updatedState.xp = state.xp + delta.xp;
+      const { newLevel, didLevelUp } = checkLevelUp(state.xp, updatedState.xp, state.level ?? 1);
+      if (didLevelUp) {
+        updatedState.level = newLevel;
+        updatedState.hp_max = (state.hp_max ?? 40) + 5;
+        updatedState.mp_max = (state.mp_max ?? 20) + 2;
+        updatedState.stamina_max = (state.stamina_max ?? 20) + 2;
+        updatedState.hp = updatedState.hp_max;
+        updatedState.mp = updatedState.mp_max;
+        updatedState.stamina = updatedState.stamina_max;
+        events.push(`LEVEL_UP:${newLevel}`);
+      }
     }
     if (delta.gold !== undefined) {
       updatedState.gold = state.gold + delta.gold;
     }
+
+    // Increment turn_count for opening narration check
+    updatedState.turn_count = (state.turn_count ?? 0) + 1;
 
     // ── 6b. Save NPC state updates ────────────────────────────────
     const mergedNpcStates = { ...npcStates, ...npcStateUpdates };
@@ -1120,7 +1185,8 @@ if (import.meta.main) serve(async (req: Request) => {
           await supabase
             .from("canonical_state")
             .update({ inventory: newInventory })
-            .eq("user_id", user_id);
+            .eq("user_id", user_id)
+            .eq("character_id", character_id);
 
           events.push("ITEM_CONSUMED");
         } else {
@@ -1159,7 +1225,8 @@ if (import.meta.main) serve(async (req: Request) => {
       await supabase
         .from("canonical_state")
         .update({ relationships })
-        .eq("user_id", user_id);
+        .eq("user_id", user_id)
+        .eq("character_id", character_id);
 
       // Emit tier change event if threshold crossed
       if (oldTier !== newTier) {
@@ -1169,12 +1236,30 @@ if (import.meta.main) serve(async (req: Request) => {
       }
     }
 
+    // ── 6e. Proactive aggression from deeply hostile NPCs ─────────
+    {
+      const relationships = (state.relationships as Record<string, unknown>) ?? {};
+      for (const npc of npcsInScene) {
+        if (npc.is_hostile && !npcStateUpdates[npc.id as string]?.is_dead) {
+          const score = getNpcRelationshipScore(npc.id as string, relationships);
+          if (score < -75) {
+            const dmg = getNpcCounterDamage(npc);
+            if (delta.hp === undefined) delta.hp = 0;
+            delta.hp -= Math.floor(dmg * 0.5); // half damage even on non-attack turns
+            events.push(`HOSTILE_AGGRESSION:${npc.name ?? npc.id}`);
+            break; // one aggression per turn max
+          }
+        }
+      }
+    }
+
     // ── 7. Write canonical state ──────────────────────────────────
     const revision_id = generateRevisionId();
     const { error: updateError } = await supabase
       .from("canonical_state")
       .update({ ...updatedState, updated_at: new Date().toISOString() })
-      .eq("user_id", user_id);
+      .eq("user_id", user_id)
+      .eq("character_id", character_id);
 
     if (updateError) throw updateError;
 
@@ -1182,6 +1267,7 @@ if (import.meta.main) serve(async (req: Request) => {
     await updateCodex(
       supabase,
       user_id,
+      character_id,
       events,
       npcsInScene,
       scene,
@@ -1197,6 +1283,7 @@ if (import.meta.main) serve(async (req: Request) => {
       await checkStoryBeats(
         supabase,
         user_id,
+        character_id,
         state.campaign_id,
         events,
         { ...state, ...updatedState },
@@ -1236,7 +1323,8 @@ if (import.meta.main) serve(async (req: Request) => {
           ? (isHard ? "hard" : "soft")
           : state.last_summary_type,
       })
-      .eq("user_id", user_id);
+      .eq("user_id", user_id)
+      .eq("character_id", character_id);
 
     // ── 9. Commit revision ────────────────────────────────────────
     const autosave_candidate =
@@ -1250,6 +1338,7 @@ if (import.meta.main) serve(async (req: Request) => {
       .insert({
         id: revision_id,
         user_id,
+        character_id,
         previous_id: previous_revision_id,
         schema_version: 1,
         player_action,

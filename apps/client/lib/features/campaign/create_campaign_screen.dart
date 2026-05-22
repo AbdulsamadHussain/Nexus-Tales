@@ -16,6 +16,7 @@ class _CreateCampaignScreenState extends State<CreateCampaignScreen> {
   final _sceneAtmosphereController = TextEditingController();
 
   String _narratorTone = 'grimdark';
+  bool _isPublic = false;
   bool _busy = false;
 
   static const _tones = [
@@ -57,6 +58,7 @@ class _CreateCampaignScreenState extends State<CreateCampaignScreen> {
           'starting_scene_atmosphere': _sceneAtmosphereController.text.trim().isEmpty
               ? _worldController.text.trim()
               : _sceneAtmosphereController.text.trim(),
+          'is_public': _isPublic,
         },
       ),
     ));
@@ -121,6 +123,33 @@ class _CreateCampaignScreenState extends State<CreateCampaignScreen> {
             ),
             const SizedBox(height: 10),
             ..._tones.map((t) => _toneCard(t.$1, t.$2, t.$3)),
+            const SizedBox(height: 20),
+            Row(
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text('MAKE WORLD PUBLIC', style: TextStyle(color: Color(0xFF4A5A72), fontSize: 10, letterSpacing: 1.5)),
+                      const SizedBox(height: 2),
+                      const Text('Other players can discover and play your world', style: TextStyle(color: Color(0xFF4A5A72), fontSize: 10)),
+                    ],
+                  ),
+                ),
+                GestureDetector(
+                  onTap: () => setState(() => _isPublic = !_isPublic),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                    decoration: BoxDecoration(
+                      color: _isPublic ? const Color(0xFF4CAF82).withOpacity(0.1) : const Color(0xFF1A2230),
+                      borderRadius: BorderRadius.circular(4),
+                      border: Border.all(color: _isPublic ? const Color(0xFF4CAF82) : const Color(0xFF2D3A4A)),
+                    ),
+                    child: Text(_isPublic ? 'ON' : 'OFF', style: TextStyle(color: _isPublic ? const Color(0xFF4CAF82) : const Color(0xFF4A5A72), fontSize: 11, letterSpacing: 1)),
+                  ),
+                ),
+              ],
+            ),
             const SizedBox(height: 20),
 
             _sectionLabel('Starting scene'),

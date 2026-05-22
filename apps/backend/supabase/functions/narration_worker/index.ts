@@ -111,7 +111,7 @@ Narrate what happens in 2-4 vivid sentences. Second person present tense. Dark f
     // This does NOT affect canonical game state
     const supabase = createClient(
       Deno.env.get("SUPABASE_URL")!,
-      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
+      Deno.env.get("SVC_ROLE_KEY")!
     );
 
     await supabase

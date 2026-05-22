@@ -3,6 +3,7 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 interface SummaryRequest {
   user_id: string;
+  character_id: string;
   revision_id: string;
   trigger_type: "hard" | "soft";
   events: string[];
@@ -54,10 +55,10 @@ if (import.meta.main) serve(async (req: Request) => {
 
   try {
     const body: SummaryRequest = await req.json();
-    const { user_id, revision_id, trigger_type, events, narration_context, ollama_url } = body;
+    const { user_id, character_id, revision_id, trigger_type, events, narration_context, ollama_url } = body;
 
-    if (!user_id || !revision_id) {
-      return jsonResponse({ error: "Missing required fields" }, 400);
+    if (!user_id || !character_id || !revision_id) {
+      return jsonResponse({ error: "Missing required fields: user_id, character_id, revision_id" }, 400);
     }
 
     const supabase = createClient(
@@ -70,6 +71,7 @@ if (import.meta.main) serve(async (req: Request) => {
       .from("canonical_state")
       .select("character_name, character_class, current_location, campaign_id, xp, level")
       .eq("user_id", user_id)
+      .eq("character_id", character_id)
       .single();
 
     // ── Build summary prompt ──────────────────────────────────────

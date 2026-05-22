@@ -20,13 +20,13 @@ serve(async (req: Request) => {
       });
     }
 
-    const serviceClient = createClient(
+    // User-scoped client to verify the JWT (works for all account types)
+    const userClient = createClient(
       Deno.env.get("SUPABASE_URL")!,
-      Deno.env.get("SVC_ROLE_KEY")!,
+      Deno.env.get("SUPABASE_ANON_KEY")!,
+      { global: { headers: { Authorization: authHeader } } },
     );
-
-    const token = authHeader.replace("Bearer ", "");
-    const { data: { user }, error: userError } = await serviceClient.auth.getUser(token);
+    const { data: { user }, error: userError } = await userClient.auth.getUser();
 
     if (userError || !user) {
       return new Response(JSON.stringify({ error: "Invalid token" }), {
@@ -35,20 +35,13 @@ serve(async (req: Request) => {
       });
     }
 
+    // Service-role client for all DB writes (bypasses RLS where needed)
+    const serviceClient = createClient(
+      Deno.env.get("SUPABASE_URL")!,
+      Deno.env.get("SVC_ROLE_KEY")!,
+    );
+
     const body = await req.json();
-
-    // ── Check for existing state ──────────────────────────────────
-    const { data: existing } = await serviceClient
-      .from("canonical_state")
-      .select("id")
-      .eq("user_id", user.id)
-      .maybeSingle();
-
-    if (existing) {
-      return new Response(JSON.stringify({ status: "EXISTS" }), {
-        headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" },
-      });
-    }
 
     // ── Resolve campaign ──────────────────────────────────────────
     // If the caller passes a `custom_campaign` object, create a new campaign row.
@@ -64,6 +57,7 @@ serve(async (req: Request) => {
         starting_scene_title: string;
         starting_scene_description: string;
         starting_scene_atmosphere: string;
+        is_public?: boolean;
       };
 
       // Generate a unique campaign id for this user
@@ -86,6 +80,7 @@ serve(async (req: Request) => {
           world_description: cc.world_description,
           narrator_tone: cc.narrator_tone,
           is_custom: true,
+          is_public: cc.is_public ?? false,
         });
       if (campaignErr) throw campaignErr;
 
@@ -105,13 +100,18 @@ serve(async (req: Request) => {
     }
 
     // ── Create canonical state ────────────────────────────────────
-    const { error: insertError } = await serviceClient
+    const newCharacterId = crypto.randomUUID();
+
+    const { data: insertedRow, error: insertError } = await serviceClient
       .from("canonical_state")
       .insert({
+        character_id: newCharacterId,
         user_id: user.id,
         character_name: body.character_name,
         character_class: body.character_class,
-        origin: body.origin,
+        portrait: body.portrait ?? 'default',
+        origin: body.origin ?? '',
+        backstory: body.backstory ?? '',
         hp: body.hp_max,
         hp_max: body.hp_max,
         mp: body.mp_max,
@@ -129,11 +129,13 @@ serve(async (req: Request) => {
           mature: false,
           graphic: false,
         },
-      });
+      })
+      .select("character_id")
+      .single();
 
     if (insertError) throw insertError;
 
-    return new Response(JSON.stringify({ status: "CREATED", campaign_id: campaignId }), {
+    return new Response(JSON.stringify({ status: "CREATED", campaign_id: campaignId, character_id: insertedRow.character_id }), {
       headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" },
     });
   } catch (err) {

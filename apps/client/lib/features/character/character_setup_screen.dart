@@ -15,11 +15,13 @@ class CharacterSetupScreen extends StatefulWidget {
 
 class _CharacterSetupScreenState extends State<CharacterSetupScreen> {
   final _nameController = TextEditingController();
+  final _originController = TextEditingController();
+  final _backstoryController = TextEditingController();
   bool _busy = false;
   String? _selectedPreset;
   bool _useCustom = false;
   String _selectedClass = 'Rogue';
-  String _selectedOrigin = 'Street Rat';
+  String _selectedPortrait = 'default';
 
   final _presets = [
     {
@@ -55,13 +57,14 @@ class _CharacterSetupScreenState extends State<CharacterSetupScreen> {
   ];
 
   final _classes = ['Rogue', 'War Mage', 'Warden', 'Plague Doctor', 'Hex Blade'];
-  final _origins = ['Street Rat', 'Academy Exile', 'Fallen Knight', 'Cultist Survivor', 'Merchant'];
 
   bool get _isCustomCampaign => widget.customCampaign != null;
 
   @override
   void dispose() {
     _nameController.dispose();
+    _originController.dispose();
+    _backstoryController.dispose();
     super.dispose();
   }
 
@@ -82,6 +85,7 @@ class _CharacterSetupScreenState extends State<CharacterSetupScreen> {
           'hp_max': preset['hp_max'],
           'mp_max': preset['mp_max'],
           'stamina_max': preset['stamina_max'],
+          'portrait': _selectedPortrait,
         };
       } else {
         final hpMax = _selectedClass == 'Warden' ? 60
@@ -91,10 +95,12 @@ class _CharacterSetupScreenState extends State<CharacterSetupScreen> {
         characterData = {
           'character_name': _nameController.text.trim(),
           'character_class': _selectedClass,
-          'origin': _selectedOrigin,
+          'origin': _originController.text.trim().isEmpty ? null : _originController.text.trim(),
+          'backstory': _backstoryController.text.trim().isEmpty ? null : _backstoryController.text.trim(),
           'hp_max': hpMax,
           'mp_max': mpMax,
           'stamina_max': 20,
+          'portrait': _selectedPortrait,
         };
       }
 
@@ -103,14 +109,16 @@ class _CharacterSetupScreenState extends State<CharacterSetupScreen> {
         characterData['custom_campaign'] = widget.customCampaign;
       }
 
-      await Supabase.instance.client.functions.invoke(
+      final response = await Supabase.instance.client.functions.invoke(
         'create_character',
         body: characterData,
       );
+      final result = response.data as Map<String, dynamic>?;
+      final characterId = result?['character_id'] as String?;
 
-      if (mounted) {
+      if (mounted && characterId != null) {
         Navigator.of(context).pushReplacement(
-          MaterialPageRoute(builder: (_) => const GameScreen()),
+          MaterialPageRoute(builder: (_) => GameScreen(characterId: characterId)),
         );
       }
     } catch (e) {
@@ -130,12 +138,10 @@ class _CharacterSetupScreenState extends State<CharacterSetupScreen> {
       backgroundColor: const Color(0xFF0A0C10),
       appBar: AppBar(
         backgroundColor: const Color(0xFF0F1219),
-        leading: _isCustomCampaign
-            ? IconButton(
-                icon: const Icon(Icons.arrow_back, color: Color(0xFF4A9EFF)),
-                onPressed: () => Navigator.of(context).pop(),
-              )
-            : null,
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back, color: Color(0xFF4A9EFF)),
+          onPressed: () => Navigator.of(context).pop(),
+        ),
         title: Text(
           _isCustomCampaign ? 'CHOOSE YOUR CHARACTER' : 'CHOOSE YOUR CHARACTER',
           style: const TextStyle(
@@ -210,14 +216,27 @@ class _CharacterSetupScreenState extends State<CharacterSetupScreen> {
                 )).toList(),
               ),
               const SizedBox(height: 16),
-              _sectionLabel('Origin'),
-              Wrap(
-                spacing: 8,
-                runSpacing: 8,
-                children: _origins.map((o) => _chip(
-                  o, _selectedOrigin == o,
-                  () => setState(() => _selectedOrigin = o),
-                )).toList(),
+              _sectionLabel('Portrait'),
+              _buildPortraitPicker(),
+              const SizedBox(height: 16),
+              _sectionLabel('Origin (optional)'),
+              TextField(
+                controller: _originController,
+                style: const TextStyle(color: Colors.white),
+                decoration: _inputDecoration('e.g. Street Rat, Exiled Noble, War Survivor...'),
+              ),
+              const SizedBox(height: 16),
+              _sectionLabel('Backstory (optional)'),
+              TextField(
+                controller: _backstoryController,
+                style: const TextStyle(color: Colors.white),
+                maxLines: 4,
+                decoration: _inputDecoration('Who are you, and what drove you here?'),
+              ),
+              const SizedBox(height: 4),
+              const Text(
+                'These details shape how the narrator describes your character and world.',
+                style: TextStyle(color: Color(0xFF4A5A72), fontSize: 11),
               ),
             ],
 
@@ -257,6 +276,41 @@ class _CharacterSetupScreenState extends State<CharacterSetupScreen> {
       'mythic': 'Mythic',
     };
     return labels[tone] ?? tone;
+  }
+
+  static const _portraits = [
+    ('default', Icons.person, Color(0xFF4A5A72)),
+    ('rogue', Icons.visibility_off, Color(0xFF9B59B6)),
+    ('mage', Icons.auto_fix_high, Color(0xFF4A9EFF)),
+    ('warrior', Icons.shield, Color(0xFF7F8C8D)),
+    ('doctor', Icons.science, Color(0xFF4CAF82)),
+    ('hex', Icons.hexagon, Color(0xFFE05555)),
+  ];
+
+  Widget _buildPortraitPicker() {
+    return Wrap(
+      spacing: 8,
+      runSpacing: 8,
+      children: _portraits.map((p) {
+        final selected = _selectedPortrait == p.$1;
+        return GestureDetector(
+          onTap: () => setState(() => _selectedPortrait = p.$1),
+          child: Container(
+            width: 52,
+            height: 52,
+            decoration: BoxDecoration(
+              color: selected ? p.$3.withOpacity(0.2) : const Color(0xFF0F1219),
+              shape: BoxShape.circle,
+              border: Border.all(
+                color: selected ? p.$3 : const Color(0xFF1A2230),
+                width: selected ? 2 : 1,
+              ),
+            ),
+            child: Icon(p.$2, color: selected ? p.$3 : const Color(0xFF4A5A72), size: 22),
+          ),
+        );
+      }).toList(),
+    );
   }
 
   Widget _presetCard(Map<String, dynamic> preset) {

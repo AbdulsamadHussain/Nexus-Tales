@@ -1,14 +1,17 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 class SavesPanel extends StatefulWidget {
   final VoidCallback onClose;
   final Future<void> Function() onLoaded;
-  
+  final String characterId;
+
   const SavesPanel({
     super.key,
     required this.onClose,
     required this.onLoaded,
+    required this.characterId,
   });
 
   @override
@@ -32,7 +35,7 @@ class _SavesPanelState extends State<SavesPanel> {
       final user = Supabase.instance.client.auth.currentUser!;
       final response = await Supabase.instance.client.functions.invoke(
         'save_manager',
-        body: {'action': 'LIST', 'user_id': user.id},
+        body: {'action': 'LIST', 'user_id': user.id, 'character_id': widget.characterId},
       );
       final data = response.data as Map<String, dynamic>;
       setState(() {
@@ -62,6 +65,7 @@ class _SavesPanelState extends State<SavesPanel> {
         body: {
           'action': 'SAVE',
           'user_id': user.id,
+          'character_id': widget.characterId,
           'save_name': saveName,
         },
       );
@@ -111,6 +115,7 @@ class _SavesPanelState extends State<SavesPanel> {
         body: {
           'action': 'LOAD',
           'user_id': user.id,
+          'character_id': widget.characterId,
           'save_id': saveId,
         },
       );
@@ -160,12 +165,65 @@ class _SavesPanelState extends State<SavesPanel> {
         body: {
           'action': 'DELETE',
           'user_id': user.id,
+          'character_id': widget.characterId,
           'save_id': saveId,
         },
       );
       await _loadSaves();
     } catch (e) {
       setState(() => _error = e.toString());
+    }
+  }
+
+  Future<void> _exportSave(String saveId, String saveName) async {
+    try {
+      final user = Supabase.instance.client.auth.currentUser!;
+      final response = await Supabase.instance.client.functions.invoke(
+        'save_manager',
+        body: {
+          'action': 'EXPORT',
+          'user_id': user.id,
+          'character_id': widget.characterId,
+          'save_id': saveId,
+        },
+      );
+      final data = response.data;
+      final jsonStr = const JsonEncoder.withIndent('  ').convert(data);
+
+      if (mounted) {
+        showDialog(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            backgroundColor: const Color(0xFF0F1219),
+            title: Text(
+              'Export — $saveName',
+              style: const TextStyle(color: Color(0xFFC9A84C), fontSize: 13),
+            ),
+            content: SizedBox(
+              width: 500,
+              height: 400,
+              child: SingleChildScrollView(
+                child: SelectableText(
+                  jsonStr,
+                  style: const TextStyle(
+                    color: Color(0xFF8898B0),
+                    fontSize: 10,
+                    fontFamily: 'monospace',
+                  ),
+                ),
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text('Close', style: TextStyle(color: Color(0xFF4A5A72))),
+              ),
+            ],
+          ),
+        );
+      }
+    } catch (e) {
+      setState(() => _error = 'Export failed: $e');
     }
   }
 
@@ -329,6 +387,11 @@ class _SavesPanelState extends State<SavesPanel> {
             icon: const Icon(Icons.restore, color: Color(0xFF4CAF82), size: 18),
             tooltip: 'Load',
             onPressed: () => _loadSave(saveId, saveName),
+          ),
+          IconButton(
+            icon: const Icon(Icons.download_outlined, color: Color(0xFF4A9EFF), size: 18),
+            tooltip: 'Export JSON',
+            onPressed: () => _exportSave(saveId, saveName),
           ),
           IconButton(
             icon: const Icon(Icons.delete_outline,

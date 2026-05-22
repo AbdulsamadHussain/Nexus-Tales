@@ -38,6 +38,16 @@ String buildFallbackNarration(String tier, Map<String, dynamic> data) {
   if (events.any((e) => e.startsWith('RELATIONSHIP_TIER_CHANGED'))) {
     parts.add('Your relationship with them shifts.');
   }
+  if (events.any((e) => e.startsWith('LEVEL_UP'))) {
+    parts.add('You feel your power grow.');
+  }
+  for (final event in events) {
+    final e = event.toString();
+    if (e.startsWith('HOSTILE_AGGRESSION:')) {
+      final npcName = e.split(':').last;
+      parts.add('$npcName attacks you unprovoked.');
+    }
+  }
 
   return parts.join(' ');
 }

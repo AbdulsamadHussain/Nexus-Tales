@@ -31,6 +31,7 @@ export const SCHEMA_DESCRIPTORS: Record<number, Record<string, string>> = {
 interface SaveRequest {
   action: "SAVE" | "LOAD" | "LIST" | "DELETE" | "EXPORT";
   user_id: string;
+  character_id?: string;
   save_name?: string;
   save_id?: string;
 }
@@ -58,7 +59,7 @@ if (import.meta.main) serve(async (req: Request) => {
 
   try {
     const body: SaveRequest = await req.json();
-    const { action, user_id } = body;
+    const { action, user_id, character_id } = body;
 
     if (!user_id || !action) {
       return jsonResponse({ error: "Missing required fields" }, 400);
@@ -74,11 +75,12 @@ if (import.meta.main) serve(async (req: Request) => {
       const save_name = body.save_name ?? `Save ${new Date().toLocaleString()}`;
 
       // Load current canonical state
-      const { data: state, error: stateError } = await supabase
+      const stateQuery = supabase
         .from("canonical_state")
         .select("*")
-        .eq("user_id", user_id)
-        .single();
+        .eq("user_id", user_id);
+      if (character_id) stateQuery.eq("character_id", character_id);
+      const { data: state, error: stateError } = await stateQuery.single();
 
       if (stateError || !state) {
         return jsonResponse({ error: "Canonical state not found" }, 404);
@@ -105,6 +107,7 @@ if (import.meta.main) serve(async (req: Request) => {
         .from("manual_saves")
         .insert({
           user_id,
+          character_id: character_id ?? null,
           revision_id: latestRevision?.id ?? "none",
           save_name,
           campaign_id: state.campaign_id,
@@ -129,12 +132,14 @@ if (import.meta.main) serve(async (req: Request) => {
 
     // ── LIST ─────────────────────────────────────────────────────
     if (action === "LIST") {
-      const { data: saves, error } = await supabase
+      const listQuery = supabase
         .from("manual_saves")
         .select("id, save_name, campaign_id, created_at, revision_id")
         .eq("user_id", user_id)
         .order("created_at", { ascending: false })
         .limit(20);
+      if (character_id) listQuery.eq("character_id", character_id);
+      const { data: saves, error } = await listQuery;
 
       if (error) throw error;
 
@@ -163,7 +168,8 @@ if (import.meta.main) serve(async (req: Request) => {
       const campaignState = snapshot.campaign_state as Record<string, unknown>;
 
       // Restore canonical state
-      const { error: restoreError } = await supabase
+      const restoreCharacterId = (canonicalState.character_id as string | undefined) ?? character_id;
+      const restoreQuery = supabase
         .from("canonical_state")
         .update({
           hp: canonicalState.hp,
@@ -185,6 +191,8 @@ if (import.meta.main) serve(async (req: Request) => {
           updated_at: new Date().toISOString(),
         })
         .eq("user_id", user_id);
+      if (restoreCharacterId) restoreQuery.eq("character_id", restoreCharacterId);
+      const { error: restoreError } = await restoreQuery;
 
       if (restoreError) throw restoreError;
 
@@ -215,11 +223,13 @@ if (import.meta.main) serve(async (req: Request) => {
         return jsonResponse({ error: "save_id required for DELETE" }, 400);
       }
 
-      const { error } = await supabase
+      const deleteQuery = supabase
         .from("manual_saves")
         .delete()
         .eq("id", body.save_id)
         .eq("user_id", user_id);
+      if (character_id) deleteQuery.eq("character_id", character_id);
+      const { error } = await deleteQuery;
 
       if (error) throw error;
 

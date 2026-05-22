@@ -17,6 +17,7 @@ type GatewayDecision =
 
 interface TurnRequest {
   user_id: string;
+  character_id?: string;
   player_action: string;
   previous_revision_id: string | null;
   resolved_route?: string;
@@ -254,10 +255,10 @@ if (import.meta.main) serve(async (req: Request) => {
 
   try {
     const body: TurnRequest = await req.json();
-    const { user_id, player_action, previous_revision_id, content_settings } =
+    const { user_id, character_id, player_action, previous_revision_id, content_settings } =
       body;
 
-    if (!user_id || !player_action || !content_settings) {
+    if (!user_id || !player_action || !content_settings || !character_id) {
       return jsonResponse({ error: "Missing required fields." }, 400);
     }
 
@@ -325,6 +326,7 @@ if (import.meta.main) serve(async (req: Request) => {
       .from("canonical_state")
       .select("current_location, ambiguity_tracker")
       .eq("user_id", user_id)
+      .eq("character_id", character_id)
       .single();
 
     const currentScene = (stateRow?.current_location as string) ?? "unknown";
@@ -352,7 +354,8 @@ if (import.meta.main) serve(async (req: Request) => {
             last_route: null,
           },
         })
-        .eq("user_id", user_id);
+        .eq("user_id", user_id)
+        .eq("character_id", character_id);
 
       return jsonResponse({
         status: "NO_OP",
@@ -369,7 +372,8 @@ if (import.meta.main) serve(async (req: Request) => {
       await supabase
         .from("canonical_state")
         .update({ ambiguity_tracker: updatedTracker })
-        .eq("user_id", user_id);
+        .eq("user_id", user_id)
+        .eq("character_id", character_id);
 
       return jsonResponse({
         status: "CLARIFICATION_REQUIRED",
@@ -382,6 +386,7 @@ if (import.meta.main) serve(async (req: Request) => {
     // ── STEP 4: Simulation service (only state writer) ────────────
     const simResponse = await callFunction("simulation_service", {
       user_id,
+      character_id,
       player_action: gateway.sanitized_input,
       route_category: routeCategory,
       action_type: actionType,
@@ -402,7 +407,8 @@ if (import.meta.main) serve(async (req: Request) => {
     await supabase
       .from("canonical_state")
       .update({ ambiguity_tracker: updatedTracker })
-      .eq("user_id", user_id);
+      .eq("user_id", user_id)
+      .eq("character_id", character_id);
 
     // ── STEP 5: Return to Flutter ─────────────────────────────────
     return jsonResponse({
