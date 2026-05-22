@@ -1,6 +1,7 @@
 {
   "version": "5",
   "specifiers": {
+    "npm:@types/node@20": "20.19.39",
     "npm:supabase@^2.87.2": "2.101.0"
   },
   "npm": {
@@ -44,6 +45,12 @@
       "os": ["win32"],
       "cpu": ["x64"]
     },
+    "@types/node@20.19.39": {
+      "integrity": "sha512-orrrD74MBUyK8jOAD/r0+lfa1I2MO6I+vAkmAWzMYbCcgrN4lCrmK52gRFQq/JRxfYPfonkr4b0jcY7Olqdqbw==",
+      "dependencies": [
+        "undici-types"
+      ]
+    },
     "supabase@2.101.0": {
       "integrity": "sha512-9wqlvXGeI+VjOMUKOGEpcZzTJGLia6IOv8LWN3W2u8F6Xiv4ZqAuTuXCp3MWfkhV5x9KQaBtN5d6IiLEMWzkJA==",
       "optionalDependencies": [
@@ -57,6 +64,9 @@
         "@supabase/cli-windows-x64"
       ],
       "bin": true
+    },
+    "undici-types@6.21.0": {
+      "integrity": "sha512-iwDZqg0QAGrg9Rav5H4n0M64c3mkR59cJ6wQp+7C4nI0gsmExaedaYLNO44eT4AtBBwjbTiGPMlt2Md0T9H9JQ=="
     }
   },
   "redirects": {
@@ -96,6 +106,7 @@
   "workspace": {
     "packageJson": {
       "dependencies": [
+        "npm:@types/node@20",
         "npm:supabase@^2.87.2"
       ]
     }
