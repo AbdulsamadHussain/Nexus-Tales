@@ -326,14 +326,17 @@ Deno.test("integration: private campaign scenes not readable by another user", a
   // invisible to any user who is not the owner.
   if (!TOKEN_B || !PRIVATE_CAMPAIGN) return;
 
-  // User B attempts to read scenes in a campaign owned by user A (private)
+  // User B attempts to read scenes in a campaign owned by user A (private).
+  // apikey must be ANON_KEY (not SVC_KEY) so PostgREST applies RLS.
+  // Using SVC_KEY as apikey would bypass RLS and return the scenes, making
+  // this test a false negative.
   const res = await fetch(
     `${BASE}/rest/v1/scenes?campaign_id=eq.${PRIVATE_CAMPAIGN}&limit=1`,
     {
       headers: {
         "Content-Type": "application/json",
         "Authorization": `Bearer ${TOKEN_B}`,
-        "apikey": SVC_KEY,
+        "apikey": ANON_KEY,
       },
     },
   );
