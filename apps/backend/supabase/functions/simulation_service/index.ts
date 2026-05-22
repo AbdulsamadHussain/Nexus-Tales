@@ -56,6 +56,136 @@ export function generateRevisionId(): string {
   return `rev_${num}`;
 }
 
+// ── NPC GENERATION (§B: on-encounter spawn) ──────────────────────
+// When a player interacts with a character that doesn't exist yet,
+// we generate them deterministically from campaign context and save
+// them permanently. The narrator then brings them to life.
+
+const ARCHETYPES: Record<string, { hp: number; is_hostile: boolean; faction: string }> = {
+  innkeeper:    { hp: 18, is_hostile: false, faction: "civilians" },
+  barkeeper:    { hp: 18, is_hostile: false, faction: "civilians" },
+  bartender:    { hp: 18, is_hostile: false, faction: "civilians" },
+  merchant:     { hp: 14, is_hostile: false, faction: "traders" },
+  trader:       { hp: 14, is_hostile: false, faction: "traders" },
+  guard:        { hp: 28, is_hostile: false, faction: "city_watch" },
+  soldier:      { hp: 28, is_hostile: false, faction: "military" },
+  captain:      { hp: 36, is_hostile: false, faction: "military" },
+  blacksmith:   { hp: 22, is_hostile: false, faction: "civilians" },
+  healer:       { hp: 14, is_hostile: false, faction: "civilians" },
+  priest:       { hp: 16, is_hostile: false, faction: "clergy" },
+  noble:        { hp: 18, is_hostile: false, faction: "nobility" },
+  thief:        { hp: 20, is_hostile: true,  faction: "underworld" },
+  bandit:       { hp: 24, is_hostile: true,  faction: "outlaws" },
+  assassin:     { hp: 22, is_hostile: true,  faction: "underworld" },
+  cultist:      { hp: 20, is_hostile: true,  faction: "cult" },
+  beggar:       { hp: 10, is_hostile: false, faction: "civilians" },
+  scholar:      { hp: 12, is_hostile: false, faction: "academy" },
+  wizard:       { hp: 16, is_hostile: false, faction: "academy" },
+  spy:          { hp: 20, is_hostile: false, faction: "shadow_compact" },
+  herbalist:    { hp: 12, is_hostile: false, faction: "civilians" },
+};
+
+const NAMES_BY_TONE: Record<string, string[]> = {
+  grimdark:   ["Varek", "Morne", "Hessa", "Cull", "Drava", "Pitch", "Ulric", "Sable", "Brix", "Wrenn"],
+  epic:       ["Aldara", "Thorn", "Caelith", "Rhovyn", "Serath", "Lyren", "Gaviel", "Auren", "Soleth", "Dawnir"],
+  horror:     ["Pallor", "Vetch", "Mara", "Silas", "Grim", "Ashle", "Nocte", "Hollow", "Vesper", "Cray"],
+  dark_comedy:["Bumble", "Gritch", "Wort", "Snag", "Pell", "Twitch", "Drab", "Mawk", "Jester", "Glib"],
+  gritty:     ["Kael", "Bryn", "Durst", "Milla", "Holt", "Sera", "Finn", "Agna", "Cole", "Rena"],
+  mythic:     ["Elarion", "Thessa", "Voryn", "Calindra", "Aethas", "Myriel", "Solvan", "Yrenna", "Draeven", "Liorel"],
+};
+
+const PERSONALITIES_BY_ARCHETYPE: Record<string, string[]> = {
+  innkeeper:  ["Pragmatic and world-weary. Seen everything, forgets nothing. Generous to paying guests, suspicious of trouble.", "Cheerful in a tired way. Runs a tight house. Values coin and quiet."],
+  merchant:   ["Calculating smile, sharper mind. Everything has a price, including information.", "Cautious and fair. Reputation matters more than any single deal."],
+  guard:      ["Dutiful and watchful. Suspicious of strangers. Will bend rules for the right offer.", "By-the-book and proud of it. Not easily intimidated."],
+  thief:      ["Nervous energy, quick hands. Looking for an angle in every conversation.", "Calm and professional. Does not steal from people he likes."],
+  bandit:     ["Aggressive and territorial. Respects strength, nothing else.", "Opportunistic. Will negotiate if it looks like they might lose."],
+  scholar:    ["Obsessive about their subject. Distracted by everything interesting. Trusts logic over people.", "Careful and precise. Every word chosen deliberately."],
+  healer:     ["Compassionate but blunt. Has seen too much suffering to be sentimental about it.", "Gentle and methodical. Suspicious of violence as a solution."],
+  noble:      ["Polished surface hiding ambition. Speaks in implications, not statements.", "Arrogant but fair. Believes in order above all else."],
+  default:    ["Wary of strangers. Says little until trust is established.", "Pragmatic. Survival-minded. Not easily impressed."],
+};
+
+function pickFromTone<T>(map: Record<string, T[]>, tone: string, seed: number): T {
+  const list = map[tone] ?? map["grimdark"] ?? Object.values(map)[0];
+  return list[seed % list.length];
+}
+
+export function extractCharacterHint(
+  action: string,
+  existingNpcs: Record<string, unknown>[],
+): string | null {
+  const lower = action.toLowerCase();
+
+  // Must be a social/examine action
+  if (!/\b(talk|speak|ask|approach|greet|address|find|look for|meet|confront|question)\b/.test(lower)) {
+    return null;
+  }
+
+  // Extract the character reference — "the innkeeper", "a guard", "old woman", etc.
+  const match = lower.match(
+    /\b(?:talk|speak|ask|approach|greet|address|find|look for|meet|confront|question)\b.{0,30}?\b(?:the|a|an|old|young|nearby|local)?\s*([a-z]+(?:\s+[a-z]+)?)\b/,
+  );
+  if (!match) return null;
+
+  const hint = match[1].trim();
+
+  // Skip pronouns and generic words
+  const skip = ["door", "room", "wall", "floor", "area", "place", "chest", "item", "around", "about"];
+  if (skip.includes(hint)) return null;
+
+  // Check if this is already an existing NPC
+  const alreadyExists = existingNpcs.some((npc) => {
+    const name = (npc.name as string ?? "").toLowerCase();
+    return name.includes(hint) || hint.includes(name.split(" ")[0]);
+  });
+
+  if (alreadyExists) return null;
+
+  return hint; // e.g. "innkeeper", "old guard", "merchant"
+}
+
+export function buildNpcData(
+  hint: string,
+  campaignId: string,
+  sceneId: string,
+  narratorTone: string,
+  seed: number,
+): Record<string, unknown> {
+  // Find closest archetype
+  const archetypeKey = Object.keys(ARCHETYPES).find((k) => hint.includes(k)) ?? "default";
+  const archetype = ARCHETYPES[archetypeKey] ?? { hp: 16, is_hostile: false, faction: "civilians" };
+
+  const name = pickFromTone(NAMES_BY_TONE, narratorTone, seed);
+  const personalityPool = PERSONALITIES_BY_ARCHETYPE[archetypeKey] ?? PERSONALITIES_BY_ARCHETYPE.default;
+  const personality = personalityPool[seed % personalityPool.length];
+
+  // Build description from hint + tone flavour
+  const toneFlour = narratorTone === "grimdark" ? "worn and guarded"
+    : narratorTone === "horror" ? "unsettling in an indefinable way"
+    : narratorTone === "epic" ? "bearing themselves with quiet purpose"
+    : narratorTone === "dark_comedy" ? "looking slightly out of place"
+    : narratorTone === "mythic" ? "with an air of ancient knowing"
+    : "unremarkable at first glance";
+
+  const npcId = `npc_gen_${campaignId.slice(-8)}_${hint.replace(/\s+/g, "_")}_${seed}`;
+
+  return {
+    id: npcId,
+    campaign_id: campaignId,
+    name,
+    description: `A ${hint}, ${toneFlour}. Met in ${sceneId.replace(/_/g, " ")}.`,
+    personality,
+    hp: archetype.hp,
+    hp_max: archetype.hp,
+    attack_damage: archetype.is_hostile ? 5 : 0,
+    faction: archetype.faction,
+    is_hostile: archetype.is_hostile,
+    loot: [],
+    scene_id: sceneId,
+  };
+}
+
 export function rollD20(modifier: number, dc: number): RollResult {
   const die = Math.floor(Math.random() * 20) + 1;
   const total = die + modifier;
@@ -803,6 +933,50 @@ if (import.meta.main) serve(async (req: Request) => {
         .select("*")
         .in("id", npcIds);
       npcsInScene = npcs || [];
+    }
+
+    // ── 2b. On-encounter NPC generation ──────────────────────────
+    // For SPEAK/EXAMINE actions in custom campaigns, detect unknown
+    // character references and spawn them permanently.
+    const hint = extractCharacterHint(player_action, npcsInScene);
+    if (hint && state.campaign_id) {
+      // Load campaign to get narrator_tone
+      const { data: campaign } = await supabase
+        .from("campaigns")
+        .select("narrator_tone, is_custom")
+        .eq("id", state.campaign_id)
+        .maybeSingle();
+
+      // Only auto-generate for custom campaigns (curated ones are pre-authored)
+      if (campaign?.is_custom) {
+        const seed = Date.now() % 1000;
+        const npcData = buildNpcData(
+          hint,
+          state.campaign_id,
+          state.current_location,
+          campaign.narrator_tone ?? "grimdark",
+          seed,
+        );
+
+        // Check NPC doesn't already exist (race condition guard)
+        const { data: existing } = await supabase
+          .from("npcs")
+          .select("id")
+          .eq("id", npcData.id)
+          .maybeSingle();
+
+        if (!existing) {
+          const { id: npcId, scene_id: _sid, ...npcRow } = npcData;
+          await supabase.from("npcs").insert({ id: npcId, ...npcRow });
+          await supabase.from("scene_npcs").insert({
+            scene_id: state.current_location,
+            npc_id: npcId,
+            spawn_condition: { generated: true, hint },
+          });
+          // Add to the in-memory list for this turn
+          npcsInScene.push({ id: npcId, ...npcRow });
+        }
+      }
     }
 
     // ── 3. Load or create player campaign state ───────────────────
