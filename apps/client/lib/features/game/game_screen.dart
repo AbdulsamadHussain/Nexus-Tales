@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:http/http.dart' as http;
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -533,7 +534,7 @@ class _GameScreenState extends ConsumerState<GameScreen> {
 
       final systemPrompt = _buildSystemPrompt(constraintText);
 
-      final uri = Uri.parse('http://localhost:11434/api/generate');
+      final uri = Uri.parse(dotenv.env['OLLAMA_URL'] != null ? '${dotenv.env['OLLAMA_URL']}/api/generate' : 'http://localhost:11434/api/generate');
       final httpResponse = await http
           .post(
             uri,
@@ -593,7 +594,7 @@ class _GameScreenState extends ConsumerState<GameScreen> {
 
     try {
       final client = http.Client();
-      final request = http.Request('POST', Uri.parse('http://localhost:11434/api/generate'));
+      final request = http.Request('POST', Uri.parse(dotenv.env['OLLAMA_URL'] != null ? '${dotenv.env['OLLAMA_URL']}/api/generate' : 'http://localhost:11434/api/generate'));
       request.headers['Content-Type'] = 'application/json';
       request.body = jsonEncode({
         'model': 'gemma4:e2b',
@@ -1304,7 +1305,7 @@ Input: "hmm" → {"route": "CLARIFICATION_REQUIRED", "action_type": "OTHER"}
 Input: "what if" → {"route": "CLARIFICATION_REQUIRED", "action_type": "OTHER"}
 Input: "the cabinet I need what is inside" → {"route": "ROLL_REQUIRED", "action_type": "SKILL_CHECK", "candidate_skill": "lockpick"}''';
 
-      final uri = Uri.parse('http://localhost:11434/api/generate');
+      final uri = Uri.parse(dotenv.env['OLLAMA_URL'] != null ? '${dotenv.env['OLLAMA_URL']}/api/generate' : 'http://localhost:11434/api/generate');
       final response = await http
           .post(
             uri,
